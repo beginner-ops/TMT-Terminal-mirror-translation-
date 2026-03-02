@@ -1,0 +1,22 @@
+[
+  {
+    "id": "huawei-display-current-config",
+    "context": "network_huawei",
+    "matcherType": "prefix",
+    "pattern": "display current-configuration",
+    "title": "查看当前配置",
+    "explanation": "显示设备当前生效配置，可用于排查策略、接口和路由配置。",
+    "risk": "safe",
+    "examples": ["display current-configuration"]
+  },
+  {
+    "id": "huawei-screen-length-0",
+    "context": "network_huawei",
+    "matcherType": "prefix",
+    "pattern": "screen-length 0 temporary",
+    "title": "临时关闭分页",
+    "explanation": "本次会话临时关闭分页，便于连续查看大段输出。",
+    "risk": "caution",
+    "examples": ["screen-length 0 temporary"]
+  }
+]

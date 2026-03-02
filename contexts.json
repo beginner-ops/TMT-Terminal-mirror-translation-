@@ -1,0 +1,569 @@
+{
+  "version": 1,
+  "defaultContextId": "shell",
+  "contexts": [
+    {
+      "id": "shell",
+      "label": "Shell",
+      "detectHints": [
+        "zsh",
+        "bash",
+        "shell",
+        "pwd",
+        "ls -"
+      ]
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "detectHints": [
+        "opencode",
+        "ask anything",
+        "tip press",
+        "/plan",
+        "/task",
+        "/help"
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "detectHints": [
+        "codex",
+        "gpt-5.3-codex",
+        "/apply_patch",
+        "/check",
+        "/help"
+      ]
+    },
+    {
+      "id": "-",
+      "label": "我的场景",
+      "detectHints": []
+    }
+  ],
+  "buttons": [
+    {
+      "id": "shell-ls-la",
+      "labelZh": "列出目录",
+      "actionType": "sendText",
+      "payload": "ls -la\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 1
+    },
+    {
+      "id": "shell-pwd",
+      "labelZh": "当前路径",
+      "actionType": "sendText",
+      "payload": "pwd\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 2
+    },
+    {
+      "id": "shell-cd-home",
+      "labelZh": "回到家目录",
+      "actionType": "sendText",
+      "payload": "cd ~\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 3
+    },
+    {
+      "id": "shell-cd-up",
+      "labelZh": "进入上级",
+      "actionType": "sendText",
+      "payload": "cd ..\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 4
+    },
+    {
+      "id": "shell-clear",
+      "labelZh": "清屏",
+      "actionType": "sendText",
+      "payload": "clear\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 5
+    },
+    {
+      "id": "shell-df",
+      "labelZh": "磁盘使用",
+      "actionType": "sendText",
+      "payload": "df -h\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 6
+    },
+    {
+      "id": "shell-du",
+      "labelZh": "目录大小",
+      "actionType": "sendText",
+      "payload": "du -sh .\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 7
+    },
+    {
+      "id": "shell-ps",
+      "labelZh": "进程概览",
+      "actionType": "sendText",
+      "payload": "ps aux | head\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 8
+    },
+    {
+      "id": "shell-port-3000",
+      "labelZh": "端口占用3000",
+      "actionType": "sendText",
+      "payload": "lsof -i :3000\\n",
+      "contextId": "shell",
+      "risk": "caution",
+      "order": 9
+    },
+    {
+      "id": "shell-git-status",
+      "labelZh": "Git状态",
+      "actionType": "sendText",
+      "payload": "git status\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 10
+    },
+    {
+      "id": "shell-git-branch",
+      "labelZh": "Git分支",
+      "actionType": "sendText",
+      "payload": "git branch -vv\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 11
+    },
+    {
+      "id": "shell-git-log",
+      "labelZh": "Git日志",
+      "actionType": "sendText",
+      "payload": "git log --oneline -n 20\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 12
+    },
+    {
+      "id": "shell-git-pull",
+      "labelZh": "拉取代码",
+      "actionType": "sendText",
+      "payload": "git pull\\n",
+      "contextId": "shell",
+      "risk": "caution",
+      "order": 13
+    },
+    {
+      "id": "shell-npm-install",
+      "labelZh": "安装依赖",
+      "actionType": "sendText",
+      "payload": "npm install\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 14
+    },
+    {
+      "id": "shell-npm-dev",
+      "labelZh": "启动开发",
+      "actionType": "sendText",
+      "payload": "npm run dev\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 15
+    },
+    {
+      "id": "shell-npm-test",
+      "labelZh": "运行测试",
+      "actionType": "sendText",
+      "payload": "npm test\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 16
+    },
+    {
+      "id": "shell-npm-build",
+      "labelZh": "构建项目",
+      "actionType": "sendText",
+      "payload": "npm run build\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 17
+    },
+    {
+      "id": "shell-python-version",
+      "labelZh": "Python版本",
+      "actionType": "sendText",
+      "payload": "python3 --version\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 18
+    },
+    {
+      "id": "shell-node-version",
+      "labelZh": "Node版本",
+      "actionType": "sendText",
+      "payload": "node -v\\n",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 19
+    },
+    {
+      "id": "shell-ansi-up",
+      "labelZh": "上一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[A",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 20
+    },
+    {
+      "id": "shell-ansi-down",
+      "labelZh": "下一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[B",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 21
+    },
+    {
+      "id": "shell-key-enter",
+      "labelZh": "提交输入",
+      "actionType": "sendKey",
+      "payload": "Enter",
+      "contextId": "shell",
+      "risk": "safe",
+      "order": 22
+    },
+    {
+      "id": "shell-key-ctrl-c",
+      "labelZh": "中断执行",
+      "actionType": "sendKey",
+      "payload": "Ctrl+C",
+      "contextId": "shell",
+      "risk": "caution",
+      "order": 23
+    },
+    {
+      "id": "shell-key-ctrl-d",
+      "labelZh": "退出终端",
+      "actionType": "sendKey",
+      "payload": "Ctrl+D",
+      "contextId": "shell",
+      "risk": "caution",
+      "order": 24
+    },
+    {
+      "id": "shell-rm-dist",
+      "labelZh": "删除构建目录",
+      "actionType": "sendText",
+      "payload": "rm -rf dist\\n",
+      "contextId": "shell",
+      "risk": "destructive",
+      "order": 25
+    },
+    {
+      "id": "shell-rm-node-modules",
+      "labelZh": "删除依赖目录",
+      "actionType": "sendText",
+      "payload": "rm -rf node_modules\\n",
+      "contextId": "shell",
+      "risk": "destructive",
+      "order": 26
+    },
+    {
+      "id": "opencode-help",
+      "labelZh": "显示帮助",
+      "actionType": "sendText",
+      "payload": "/help\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 1
+    },
+    {
+      "id": "opencode-new",
+      "labelZh": "新建会话",
+      "actionType": "sendText",
+      "payload": "/new\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 2
+    },
+    {
+      "id": "opencode-continue",
+      "labelZh": "继续执行",
+      "actionType": "sendText",
+      "payload": "/continue\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 3
+    },
+    {
+      "id": "opencode-status",
+      "labelZh": "查看状态",
+      "actionType": "sendText",
+      "payload": "/status\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 4
+    },
+    {
+      "id": "opencode-context",
+      "labelZh": "查看上下文",
+      "actionType": "sendText",
+      "payload": "/context\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 5
+    },
+    {
+      "id": "opencode-model",
+      "labelZh": "查看模型",
+      "actionType": "sendText",
+      "payload": "/model\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 6
+    },
+    {
+      "id": "opencode-plan",
+      "labelZh": "切换计划模式",
+      "actionType": "sendText",
+      "payload": "/plan\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 7
+    },
+    {
+      "id": "opencode-tasks",
+      "labelZh": "任务列表",
+      "actionType": "sendText",
+      "payload": "/tasks\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 8
+    },
+    {
+      "id": "opencode-clear",
+      "labelZh": "清屏",
+      "actionType": "sendText",
+      "payload": "clear\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 9
+    },
+    {
+      "id": "opencode-ls",
+      "labelZh": "列出文件",
+      "actionType": "sendText",
+      "payload": "ls -la\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 10
+    },
+    {
+      "id": "opencode-pwd",
+      "labelZh": "当前路径",
+      "actionType": "sendText",
+      "payload": "pwd\\n",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 11
+    },
+    {
+      "id": "opencode-ansi-up",
+      "labelZh": "上一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[A",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 12
+    },
+    {
+      "id": "opencode-ansi-down",
+      "labelZh": "下一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[B",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 13
+    },
+    {
+      "id": "opencode-enter",
+      "labelZh": "提交输入",
+      "actionType": "sendKey",
+      "payload": "Enter",
+      "contextId": "opencode",
+      "risk": "safe",
+      "order": 14
+    },
+    {
+      "id": "opencode-stop",
+      "labelZh": "取消当前任务",
+      "actionType": "sendKey",
+      "payload": "Ctrl+C",
+      "contextId": "opencode",
+      "risk": "caution",
+      "order": 15
+    },
+    {
+      "id": "opencode-exit",
+      "labelZh": "退出界面",
+      "actionType": "sendKey",
+      "payload": "Ctrl+D",
+      "contextId": "opencode",
+      "risk": "caution",
+      "order": 16
+    },
+    {
+      "id": "codex-help",
+      "labelZh": "查看帮助",
+      "actionType": "sendText",
+      "payload": "/help\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 1
+    },
+    {
+      "id": "codex-continue",
+      "labelZh": "继续执行",
+      "actionType": "sendText",
+      "payload": "/continue\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 2
+    },
+    {
+      "id": "codex-status",
+      "labelZh": "查看状态",
+      "actionType": "sendText",
+      "payload": "/status\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 3
+    },
+    {
+      "id": "codex-context",
+      "labelZh": "查看上下文",
+      "actionType": "sendText",
+      "payload": "/context\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 4
+    },
+    {
+      "id": "codex-plan",
+      "labelZh": "打开计划",
+      "actionType": "sendText",
+      "payload": "/plan\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 5
+    },
+    {
+      "id": "codex-retry",
+      "labelZh": "重新生成",
+      "actionType": "sendText",
+      "payload": "/retry\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 6
+    },
+    {
+      "id": "codex-apply-patch",
+      "labelZh": "应用补丁",
+      "actionType": "sendText",
+      "payload": "/apply_patch\\n",
+      "contextId": "codex",
+      "risk": "caution",
+      "order": 7
+    },
+    {
+      "id": "codex-check",
+      "labelZh": "运行检查",
+      "actionType": "sendText",
+      "payload": "/check\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 8
+    },
+    {
+      "id": "codex-clear",
+      "labelZh": "清屏",
+      "actionType": "sendText",
+      "payload": "clear\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 9
+    },
+    {
+      "id": "codex-ls",
+      "labelZh": "列出文件",
+      "actionType": "sendText",
+      "payload": "ls -la\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 10
+    },
+    {
+      "id": "codex-pwd",
+      "labelZh": "当前路径",
+      "actionType": "sendText",
+      "payload": "pwd\\n",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 11
+    },
+    {
+      "id": "codex-ansi-up",
+      "labelZh": "上一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[A",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 12
+    },
+    {
+      "id": "codex-ansi-down",
+      "labelZh": "下一条",
+      "actionType": "sendAnsi",
+      "payload": "\\x1b[B",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 13
+    },
+    {
+      "id": "codex-enter",
+      "labelZh": "提交输入",
+      "actionType": "sendKey",
+      "payload": "Enter",
+      "contextId": "codex",
+      "risk": "safe",
+      "order": 14
+    },
+    {
+      "id": "codex-stop",
+      "labelZh": "中断输出",
+      "actionType": "sendKey",
+      "payload": "Ctrl+C",
+      "contextId": "codex",
+      "risk": "caution",
+      "order": 15
+    },
+    {
+      "id": "codex-exit",
+      "labelZh": "退出界面",
+      "actionType": "sendKey",
+      "payload": "Ctrl+D",
+      "contextId": "codex",
+      "risk": "caution",
+      "order": 16
+    }
+  ]
+}

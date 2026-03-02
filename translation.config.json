@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "defaultProvider": "google-free",
+  "fallbackProviders": [],
+  "timeoutMs": 12000,
+  "mirror": {
+    "skipRules": {
+      "stackLike": true,
+      "symbolOnly": true,
+      "protectedOnly": true,
+      "outOfViewport": true
+    },
+    "localMatchPriority": [
+      "exact",
+      "caseInsensitive",
+      "pattern"
+    ],
+    "fallbackUiOnly": true
+  },
+  "providers": {
+    "googleFree": {
+      "endpoint": "https://translate.googleapis.com/translate_a/single",
+      "endpoints": [
+        "https://translate.googleapis.com/translate_a/single",
+        "https://translate.google.com/translate_a/single"
+      ]
+    },
+    "openaiCompatible": {
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "apiKeyEnv": "OPENAI_API_KEY"
+    },
+    "tencentTmt": {
+      "endpoint": "https://tmt.tencentcloudapi.com/",
+      "region": "ap-guangzhou",
+      "source": "en",
+      "target": "zh",
+      "projectId": 0,
+      "secretIdEnv": "TENCENT_SECRET_ID",
+      "secretKeyEnv": "TENCENT_SECRET_KEY"
+    }
+  }
+}

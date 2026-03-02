@@ -1,0 +1,34 @@
+[
+  {
+    "id": "docker-logs-follow",
+    "context": "docker",
+    "matcherType": "prefix",
+    "pattern": "docker logs -f <id>",
+    "title": "持续查看容器日志",
+    "explanation": "持续追踪指定容器输出。常用于排查启动失败、异常重启、接口报错等问题。",
+    "risk": "safe",
+    "args": ["-f: 持续跟随输出", "<id>: 容器名称或容器ID"],
+    "examples": ["docker logs -f <id>", "docker logs -f my-api"]
+  },
+  {
+    "id": "docker-ps",
+    "context": "docker",
+    "matcherType": "prefix",
+    "pattern": "docker ps",
+    "title": "查看容器列表",
+    "explanation": "查看正在运行的容器；加 -a 可查看历史容器。",
+    "risk": "safe",
+    "args": ["-a: 包含已退出容器"],
+    "examples": ["docker ps", "docker ps -a"]
+  },
+  {
+    "id": "docker-system-prune",
+    "context": "docker",
+    "matcherType": "regex",
+    "pattern": "^docker\\s+system\\s+prune\\b",
+    "title": "清理 Docker 无用资源",
+    "explanation": "清理未使用镜像、容器和网络。可能删除排查所需历史资源，执行前需确认。",
+    "risk": "danger",
+    "examples": ["docker system prune -a"]
+  }
+]

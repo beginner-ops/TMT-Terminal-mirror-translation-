@@ -1,0 +1,32 @@
+[
+  {
+    "id": "shell-ls-la",
+    "context": "linux_shell",
+    "matcherType": "prefix",
+    "pattern": "ls -la",
+    "title": "查看目录详细信息",
+    "explanation": "列出目录下所有文件（含隐藏文件）并显示权限、拥有者、大小和修改时间。",
+    "risk": "safe",
+    "examples": ["ls -la", "ls -la /etc"]
+  },
+  {
+    "id": "shell-rm-rf",
+    "context": "linux_shell",
+    "matcherType": "regex",
+    "pattern": "^rm\\s+-rf\\b",
+    "title": "递归强制删除",
+    "explanation": "递归删除且不提示确认，误操作风险高。执行前应再次确认路径。",
+    "risk": "danger",
+    "examples": ["rm -rf /tmp/test-dir"]
+  },
+  {
+    "id": "shell-cat-file",
+    "context": "linux_shell",
+    "matcherType": "prefix",
+    "pattern": "cat ",
+    "title": "输出文件内容",
+    "explanation": "读取并打印文件内容到终端。",
+    "risk": "safe",
+    "examples": ["cat <path>", "cat /etc/hosts"]
+  }
+]

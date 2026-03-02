@@ -1,0 +1,22 @@
+[
+  {
+    "id": "cisco-show-running-config",
+    "context": "network_cisco",
+    "matcherType": "prefix",
+    "pattern": "show running-config",
+    "title": "查看当前运行配置",
+    "explanation": "显示设备当前生效配置，不等同于启动配置。用于排障和核对实时状态。",
+    "risk": "safe",
+    "examples": ["show running-config", "show running-config interface gi0/1"]
+  },
+  {
+    "id": "cisco-terminal-length-0",
+    "context": "network_cisco",
+    "matcherType": "prefix",
+    "pattern": "terminal length 0",
+    "title": "关闭分页输出",
+    "explanation": "关闭分页，长输出将连续打印。适合采集完整 show 结果。",
+    "risk": "caution",
+    "examples": ["terminal length 0"]
+  }
+]
