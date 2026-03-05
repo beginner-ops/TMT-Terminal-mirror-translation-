@@ -9,8 +9,11 @@ const onPtyData = (listener: (payload: { tabId: string; data: string }) => void)
   }
 }
 
-const onPtyExit = (listener: (payload: { tabId: string; exitCode: number }) => void): (() => void) => {
-  const wrapped = (_event: IpcRendererEvent, payload: { tabId: string; exitCode: number }) => listener(payload)
+const onPtyExit = (listener: (payload: { tabId: string; exitCode: number; source?: 'pty' | 'local' }) => void): (() => void) => {
+  const wrapped = (
+    _event: IpcRendererEvent,
+    payload: { tabId: string; exitCode: number; source?: 'pty' | 'local' },
+  ) => listener(payload)
   ipcRenderer.on('pty:exit', wrapped)
 
   return () => {

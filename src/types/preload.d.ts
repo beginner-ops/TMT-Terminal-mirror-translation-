@@ -144,6 +144,7 @@ declare global {
     sessionName?: string
     cleanText: string
     jsonl: string
+    autoPathTemplate?: string
   }
 
   type TermbridgeSessionLogExportResult = {
@@ -174,7 +175,7 @@ declare global {
       saveContexts: (nextConfig: TermbridgeCommandConfig) => Promise<TermbridgeCommandConfigPayload>
       exportSessionLog: (payload: TermbridgeSessionLogExportRequest) => Promise<TermbridgeSessionLogExportResult>
       onPtyData: (listener: (payload: { tabId: string; data: string }) => void) => () => void
-      onPtyExit: (listener: (payload: { tabId: string; exitCode: number }) => void) => () => void
+      onPtyExit: (listener: (payload: { tabId: string; exitCode: number; source?: 'pty' | 'local' }) => void) => () => void
     }
   }
 }

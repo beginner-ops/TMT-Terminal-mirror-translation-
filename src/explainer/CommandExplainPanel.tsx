@@ -24,7 +24,13 @@ type CommandExplainPanelProps = {
     examples: string[]
   }) => void
   onDeleteUserRule: (id: string) => void
+  onBulkDeleteUserRules: (ids: string[]) => void
+  onBulkDeleteContexts: (contexts: ExplainContext[]) => void
+  onExportData: () => void
+  onImportData: () => void
 }
+
+type ManageView = 'create' | 'contexts' | 'rules'
 
 const CONTEXT_OPTIONS: Array<{ id: ExplainContext | 'all'; label: string }> = [
   { id: 'all', label: '全部' },
@@ -51,10 +57,15 @@ export const CommandExplainPanel = ({
   userRules,
   onUpsertUserRule,
   onDeleteUserRule,
+  onBulkDeleteUserRules,
+  onBulkDeleteContexts,
+  onExportData,
+  onImportData,
 }: CommandExplainPanelProps) => {
   const [searchText, setSearchText] = useState('')
   const [contextFilter, setContextFilter] = useState<ExplainContext | 'all'>('all')
   const [editorOpen, setEditorOpen] = useState(false)
+  const [manageView, setManageView] = useState<ManageView>('create')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [context, setContext] = useState<ExplainContext>('linux_shell')
   const [matcherType, setMatcherType] = useState<ExplainMatcherType>('prefix')
@@ -66,6 +77,8 @@ export const CommandExplainPanel = ({
   const [examplesText, setExamplesText] = useState('')
   const [statusText, setStatusText] = useState('')
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>({})
+  const [selectedContexts, setSelectedContexts] = useState<ExplainContext[]>([])
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([])
 
   const allRules = useMemo(() => {
     const builtin: ViewRule[] = []
@@ -110,6 +123,18 @@ export const CommandExplainPanel = ({
     return null
   }
 
+  const toggleContextSelection = (ctx: ExplainContext): void => {
+    setSelectedContexts((previous) =>
+      previous.includes(ctx) ? previous.filter((item) => item !== ctx) : [...previous, ctx],
+    )
+  }
+
+  const toggleRuleSelection = (id: string): void => {
+    setSelectedRuleIds((previous) =>
+      previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id],
+    )
+  }
+
   const resetEditor = (): void => {
     setEditingId(null)
     setContext('linux_shell')
@@ -126,14 +151,23 @@ export const CommandExplainPanel = ({
     <aside className="command-search-panel" role="dialog" aria-label="Command explain library">
       <div className="command-search-header">
         <div>
-          <div className="command-search-title">命令解释</div>
-          <div className="command-search-subtitle">解释规则库（本地优先 + 按上下文）</div>
+          <div className="command-search-title">配置解读</div>
+          <div className="command-search-subtitle">解读规则库（本地优先 + 按上下文）</div>
         </div>
-        <button className="command-search-close" onClick={onClose}>
-          收起
-        </button>
+        <div className="session-panel-header-actions">
+          <button
+            className={`command-search-close${editorOpen ? ' toolbar-button-active' : ''}`}
+            onClick={() => setEditorOpen((previous) => !previous)}
+          >
+            {editorOpen ? '退出管理' : '管理+'}
+          </button>
+          <button className="command-search-close" onClick={onClose}>
+            收起
+          </button>
+        </div>
       </div>
 
+      {!editorOpen && (
       <div className="command-search-toolbar">
         <input
           className="command-search-input-lg"
@@ -151,18 +185,43 @@ export const CommandExplainPanel = ({
               {item.label}
             </button>
           ))}
-          <button
-            className={`command-search-manage-toggle${editorOpen ? ' command-search-manage-toggle-active' : ''}`}
-            onClick={() => setEditorOpen((previous) => !previous)}
-          >
-            {editorOpen ? '收起管理' : '管理+'}
-          </button>
         </div>
         <div className="command-search-summary">命中 {filtered.length} 条</div>
       </div>
+      )}
 
       {editorOpen && (
         <div className="command-editor-panel">
+          <div className="session-editor-row">
+            <button className="session-action session-action-primary" onClick={onExportData}>
+              数据交换：导出
+            </button>
+            <button className="session-action" onClick={onImportData}>
+              数据交换：导入
+            </button>
+          </div>
+          <div className="session-editor-row session-manage-tabs">
+            <button
+              className={`session-action${manageView === 'create' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('create')}
+            >
+              新增/编辑
+            </button>
+            <button
+              className={`session-action${manageView === 'contexts' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('contexts')}
+            >
+              批量删类目
+            </button>
+            <button
+              className={`session-action${manageView === 'rules' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('rules')}
+            >
+              批量删条目
+            </button>
+          </div>
+          {manageView === 'create' && (
+          <>
           <div className="command-editor-title">{editingId ? '编辑本地解释规则' : '新增本地解释规则'}</div>
           <div className="command-editor-grid">
             <select className="command-editor-select" value={context} onChange={(event) => setContext(event.target.value as ExplainContext)}>
@@ -259,9 +318,90 @@ export const CommandExplainPanel = ({
               清空
             </button>
           </div>
+          </>
+          )}
+          {manageView === 'contexts' && (
+            <>
+              <div className="command-editor-title">批量删除类目（上下文）</div>
+              <div className="command-modal-list-scroll">
+                {(['linux_shell', 'docker', 'network_cisco', 'network_huawei'] as ExplainContext[]).map((ctx) => (
+                  <label key={ctx} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedContexts.includes(ctx)}
+                        onChange={() => toggleContextSelection(ctx)}
+                      />
+                      {' '}
+                      {ctx}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedContexts.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定删除 ${selectedContexts.length} 个类目下的本地规则？`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteContexts(selectedContexts)
+                    setSelectedContexts([])
+                    setStatusText('已批量删除类目下本地规则')
+                  }}
+                >
+                  批量删除类目
+                </button>
+              </div>
+            </>
+          )}
+          {manageView === 'rules' && (
+            <>
+              <div className="command-editor-title">批量删除条目（仅本地规则）</div>
+              <div className="command-modal-list-scroll">
+                {userRules.map((rule) => (
+                  <label key={rule.id} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedRuleIds.includes(rule.id)}
+                        onChange={() => toggleRuleSelection(rule.id)}
+                      />
+                      {' '}
+                      {rule.title}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedRuleIds.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定批量删除 ${selectedRuleIds.length} 条本地规则？`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteUserRules(selectedRuleIds)
+                    setSelectedRuleIds([])
+                    setStatusText('已批量删除本地规则')
+                  }}
+                >
+                  批量删除条目
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
+      {!editorOpen && (
       <div className="command-search-list" role="list">
         {filtered.length === 0 && <div className="command-search-empty">没有匹配解释规则</div>}
         {filtered.map((rule) => {
@@ -341,8 +481,8 @@ export const CommandExplainPanel = ({
           )
         })}
       </div>
+      )}
       <div className="session-status">{statusText || ' '}</div>
     </aside>
   )
 }
-

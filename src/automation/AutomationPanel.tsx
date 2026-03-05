@@ -44,7 +44,13 @@ type AutomationPanelProps = {
   onDeleteGroup: (group: AutomationGroup) => void
   onReorderGroups: (sourceGroupId: string, targetGroupId: string) => void
   onReorderScripts: (sourceScriptId: string, targetScriptId: string) => void
+  onBulkDeleteGroups: (groupIds: string[]) => void
+  onBulkDeleteScripts: (scriptIds: string[]) => void
+  onExportData: () => void
+  onImportData: () => void
 }
+
+type ManageView = 'groups' | 'scripts' | 'create' | 'actions'
 
 type RuntimeScriptState = {
   draft: string
@@ -103,6 +109,37 @@ const resolveRuntimeScript = (script: AutomationScript, runtime: RuntimeScriptSt
   return applyTemplateParams(source, runtime.params)
 }
 
+const ACTION_TEMPLATE_HUAWEI_EXPORT = `app.clear_view
+term.send display current-configuration
+term.wait_prompt 90000
+app.export_visible`
+
+const ACTION_TEMPLATE_CISCO_EXPORT = `app.clear_view
+term.send show running-config
+term.wait_prompt 90000
+app.export_visible`
+
+const ACTION_TEMPLATE_BROADCAST_ALL = `term.send_all display version`
+
+const ACTION_TEMPLATE_BROADCAST_SELECTED = `term.send_tabs Tab 1,Tab 2 :: display current-configuration`
+
+const ACTION_TEMPLATE_BROADCAST_MODE = `term.mode broadcast_all
+display version
+display clock
+display ip interface brief
+# 无需手动关闭：脚本结束自动恢复当前终端模式`
+
+const ACTION_TEMPLATE_RUN_TAG_GROUP = `session.run_tag_group 核心设备巡检组 :: new`
+
+const ACTION_TEMPLATE_SLEEP = `term.send display version
+time.sleep 1200
+term.send display clock`
+
+const ACTION_TEMPLATE_EXPORT_AUTO = `app.clear_view
+term.send display current-configuration
+term.wait_prompt 90000
+app.export_visible_to exports/{date}/{sessionSlug}-{tabId}-{ts}`
+
 export const AutomationPanel = ({
   isOpen,
   config,
@@ -114,10 +151,15 @@ export const AutomationPanel = ({
   onDeleteGroup,
   onReorderGroups,
   onReorderScripts,
+  onBulkDeleteGroups,
+  onBulkDeleteScripts,
+  onExportData,
+  onImportData,
 }: AutomationPanelProps) => {
   const [searchText, setSearchText] = useState('')
   const [groupIdFilter, setGroupIdFilter] = useState('all')
   const [editorOpen, setEditorOpen] = useState(false)
+  const [manageView, setManageView] = useState<ManageView>('create')
   const [editingId, setEditingId] = useState('')
   const [newGroupLabel, setNewGroupLabel] = useState('')
   const [groupId, setGroupId] = useState<string>(config.groups[0]?.id ?? 'shell-native')
@@ -130,6 +172,8 @@ export const AutomationPanel = ({
   const [draggingScriptId, setDraggingScriptId] = useState<string | null>(null)
   const [runtimeById, setRuntimeById] = useState<Record<string, RuntimeScriptState>>({})
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>({})
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+  const [selectedScriptIds, setSelectedScriptIds] = useState<string[]>([])
 
   const filteredScripts = useMemo(() => {
     const keyword = searchText.trim().toLocaleLowerCase()
@@ -154,6 +198,18 @@ export const AutomationPanel = ({
     return null
   }
 
+  const toggleGroupSelection = (groupId: string): void => {
+    setSelectedGroupIds((previous) =>
+      previous.includes(groupId) ? previous.filter((id) => id !== groupId) : [...previous, groupId],
+    )
+  }
+
+  const toggleScriptSelection = (scriptId: string): void => {
+    setSelectedScriptIds((previous) =>
+      previous.includes(scriptId) ? previous.filter((id) => id !== scriptId) : [...previous, scriptId],
+    )
+  }
+
   const clearEditor = (): void => {
     setEditingId('')
     setName('')
@@ -168,13 +224,22 @@ export const AutomationPanel = ({
       <div className="command-search-header">
         <div>
           <div className="command-search-title">自动化脚本</div>
-          <div className="command-search-subtitle">脚本检索、分组归档、一键发送</div>
+          <div className="command-search-subtitle">脚本检索、分组归档、一键发送（支持 clear/wait/export 动作）</div>
         </div>
-        <button className="command-search-close" onClick={onClose}>
-          收起
-        </button>
+        <div className="session-panel-header-actions">
+          <button
+            className={`command-search-close${editorOpen ? ' toolbar-button-active' : ''}`}
+            onClick={() => setEditorOpen((previous) => !previous)}
+          >
+            {editorOpen ? '退出管理' : '管理+'}
+          </button>
+          <button className="command-search-close" onClick={onClose}>
+            收起
+          </button>
+        </div>
       </div>
 
+      {!editorOpen && (
       <div className="command-search-toolbar">
         <input
           className="command-search-input-lg"
@@ -214,26 +279,51 @@ export const AutomationPanel = ({
               >
                 {group.label}
               </button>
-              {group.id === 'shell-native' && (
-                <button
-                  className={`command-search-manage-toggle${editorOpen ? ' command-search-manage-toggle-active' : ''}`}
-                  onClick={() => setEditorOpen((previous) => !previous)}
-                  draggable
-                  onDragStart={() => setDraggingGroupId(group.id)}
-                  onDragEnd={() => setDraggingGroupId(null)}
-                  title="创建分组与脚本"
-                >
-                  {editorOpen ? '收起管理' : '管理+'}
-                </button>
-              )}
             </div>
           ))}
         </div>
         <div className="command-search-summary">命中 {filteredScripts.length} 条</div>
       </div>
+      )}
 
       {editorOpen && (
         <div className="command-editor-panel">
+          <div className="session-editor-row">
+            <button className="session-action session-action-primary" onClick={onExportData}>
+              数据交换：导出
+            </button>
+            <button className="session-action" onClick={onImportData}>
+              数据交换：导入
+            </button>
+          </div>
+          <div className="session-editor-row session-manage-tabs">
+            <button
+              className={`session-action${manageView === 'create' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('create')}
+            >
+              新增
+            </button>
+            <button
+              className={`session-action${manageView === 'groups' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('groups')}
+            >
+              批量删类目
+            </button>
+            <button
+              className={`session-action${manageView === 'scripts' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('scripts')}
+            >
+              批量删条目
+            </button>
+            <button
+              className={`session-action${manageView === 'actions' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('actions')}
+            >
+              应用动作模板
+            </button>
+          </div>
+          {manageView === 'create' && (
+          <>
           <div className="command-editor-title">新增分组</div>
           <div className="command-editor-row">
             <input
@@ -295,7 +385,9 @@ export const AutomationPanel = ({
             className="command-field-textarea"
             value={content}
             onChange={(event) => setContent(event.target.value)}
-            placeholder="脚本正文（支持模板：docker logs -f ${container}）"
+            placeholder={
+              '脚本正文（支持模板变量、app.clear_view / term.send / term.send_all / term.send_tabs / term.mode / session.run_tag_group / time.sleep / term.wait_prompt / app.export_visible / app.export_visible_to）'
+            }
           />
           <div className="command-editor-actions">
             <button
@@ -328,9 +420,203 @@ export const AutomationPanel = ({
               清空
             </button>
           </div>
+          </>
+          )}
+          {manageView === 'groups' && (
+            <>
+              <div className="command-editor-title">批量删除类目</div>
+              <div className="command-modal-list-scroll">
+                {config.groups.filter((group) => !group.system).map((group) => (
+                  <label key={group.id} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedGroupIds.includes(group.id)}
+                        onChange={() => toggleGroupSelection(group.id)}
+                      />
+                      {' '}
+                      {group.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedGroupIds.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定批量删除 ${selectedGroupIds.length} 个类目？其下脚本会一起删除。`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteGroups(selectedGroupIds)
+                    setSelectedGroupIds([])
+                  }}
+                >
+                  批量删除类目
+                </button>
+              </div>
+            </>
+          )}
+          {manageView === 'scripts' && (
+            <>
+              <div className="command-editor-title">批量删除条目</div>
+              <div className="command-modal-list-scroll">
+                {config.scripts.map((script) => (
+                  <label key={script.id} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedScriptIds.includes(script.id)}
+                        onChange={() => toggleScriptSelection(script.id)}
+                      />
+                      {' '}
+                      {script.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedScriptIds.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定批量删除 ${selectedScriptIds.length} 个条目？`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteScripts(selectedScriptIds)
+                    setSelectedScriptIds([])
+                  }}
+                >
+                  批量删除条目
+                </button>
+              </div>
+            </>
+          )}
+          {manageView === 'actions' && (
+            <>
+              <div className="command-editor-title">应用内动作（自动化可调用）</div>
+              <div className="automation-action-guide">
+                <div className="automation-action-guide-list">
+                  <code>app.clear_view</code>
+                  <span>清空当前标签显示（作为导出起点）</span>
+                  <code>term.send &lt;命令&gt;</code>
+                  <span>发送命令并回车</span>
+                  <code>term.send_all &lt;命令&gt;</code>
+                  <span>广播命令到全部已打开且在线的终端标签</span>
+                  <code>term.send_tabs &lt;目标&gt; :: &lt;命令&gt;</code>
+                  <span>仅发到指定终端；目标支持 Tab 标题/ID/序号（逗号分隔），如 Tab 1,Tab 2 或 1,2</span>
+                  <code>term.mode broadcast_all</code>
+                  <span>开启脚本广播模式：后续普通命令默认广播到全部终端</span>
+                  <code>term.mode tabs &lt;目标&gt;</code>
+                  <span>开启指定终端模式：后续普通命令默认发送到指定终端集合</span>
+                  <code>term.mode current</code>
+                  <span>恢复到当前终端模式（可选；脚本结束会自动恢复）</span>
+                  <code>session.run_tag_group &lt;标签组名&gt; :: new|current</code>
+                  <span>按会话管理“标签分组”批量连接设备；默认 current（第一个当前，其余新标签），写 :: new 则全部新标签</span>
+                  <code>time.sleep [毫秒]</code>
+                  <span>主动等待一段时间（默认 1000ms），用于设备响应慢或防止命令过快</span>
+                  <code>term.wait_prompt [毫秒]</code>
+                  <span>等待输出完成（默认 60000）</span>
+                  <code>app.export_visible</code>
+                  <span>导出清屏后的累计输出</span>
+                  <code>app.export_visible_to &lt;路径模板&gt;</code>
+                  <span>无弹窗自动落盘导出（相对路径基于项目根目录；会按 current/tabs/broadcast 路由对目标终端逐个导出）</span>
+                </div>
+                <div className="automation-action-guide-list">
+                  <span>路径变量：</span>
+                  <code>{'{date}'}</code>
+                  <span>日期，如 2026-03-04</span>
+                  <code>{'{ts}'}</code>
+                  <span>时间戳，如 2026-03-04T16-22-11-123Z</span>
+                  <code>{'{sessionSlug}'}</code>
+                  <span>会话安全名（推荐用于文件名）</span>
+                  <code>{'{tabSlug}'}</code>
+                  <span>标签安全名</span>
+                  <code>{'{sessionName}'}</code>
+                  <span>会话名（原文）</span>
+                  <code>{'{tabTitle}'}</code>
+                  <span>标签标题（原文）</span>
+                  <code>{'{tabId}'}</code>
+                  <span>标签 ID</span>
+                </div>
+                <div className="automation-action-guide-list">
+                  <span>路径样式示例：</span>
+                  <code>exports/{'{date}'}/{'{sessionSlug}'}-{'{ts}'}</code>
+                  <span>落盘到项目目录：`termbridge-v2/exports/...`（自动补 `.txt`，并生成同名 `.jsonl`）</span>
+                  <code>exports/{'{date}'}/{'{sessionSlug}'}-{'{tabId}'}-{'{ts}'}</code>
+                  <span>批量导出推荐，避免多终端同名覆盖</span>
+                  <code>~/Desktop/tb-exports/{'{sessionSlug}'}-{'{ts}'}.txt</code>
+                  <span>落盘到桌面目录（支持 `~/`）</span>
+                </div>
+              </div>
+              <div className="command-editor-title">模板：脚本广播模式（推荐）</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_BROADCAST_MODE}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_BROADCAST_MODE)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：广播到全部终端</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_BROADCAST_ALL}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_BROADCAST_ALL)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：发送到指定终端</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_BROADCAST_SELECTED}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_BROADCAST_SELECTED)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：运行标签分组连接</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_RUN_TAG_GROUP}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_RUN_TAG_GROUP)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：命令间延迟</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_SLEEP}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_SLEEP)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：华为配置导出</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_HUAWEI_EXPORT}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_HUAWEI_EXPORT)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：Cisco 配置导出</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_CISCO_EXPORT}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_CISCO_EXPORT)}>
+                  填入编辑器
+                </button>
+              </div>
+              <div className="command-editor-title">模板：自动落盘导出（无弹窗）</div>
+              <pre className="automation-action-guide-example">{ACTION_TEMPLATE_EXPORT_AUTO}</pre>
+              <div className="command-editor-actions">
+                <button className="command-editor-button" onClick={() => setContent(ACTION_TEMPLATE_EXPORT_AUTO)}>
+                  填入编辑器
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
+      {!editorOpen && (
       <div className="command-search-list" role="list">
         {filteredScripts.length === 0 && <div className="command-search-empty">没有找到匹配脚本</div>}
         {filteredScripts.map((script) => {
@@ -375,7 +661,7 @@ export const AutomationPanel = ({
                 <div className="command-search-card-title">{script.name}</div>
                 <div className={`command-search-risk command-search-risk-${script.risk}`}>{riskLabel(script.risk)}</div>
               </div>
-              <pre className="command-search-command">{script.content}</pre>
+              <pre className="command-search-command automation-script-command-preview">{script.content}</pre>
               <div className="command-search-actions">
                 <button
                   className="command-search-action command-search-action-primary"
@@ -497,6 +783,7 @@ export const AutomationPanel = ({
           )
         })}
       </div>
+      )}
     </aside>
   )
 }

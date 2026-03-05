@@ -28,7 +28,13 @@ type CommandSearchPanelProps = {
   onDeleteEntry: (entry: CommandCatalogEntry) => void
   onReorderEntries: (sourceEntryId: string, targetEntryId: string) => void
   onResetSystemEntries: () => void
+  onBulkDeleteGroups: (groupIds: string[]) => void
+  onBulkDeleteEntries: (entryIds: string[]) => void
+  onExportData: () => void
+  onImportData: () => void
 }
+
+type ManageView = 'groups' | 'entries' | 'create'
 
 type RuntimeCommandState = {
   draft: string
@@ -143,10 +149,15 @@ export const CommandSearchPanel = ({
   onDeleteEntry,
   onReorderEntries,
   onResetSystemEntries,
+  onBulkDeleteGroups,
+  onBulkDeleteEntries,
+  onExportData,
+  onImportData,
 }: CommandSearchPanelProps) => {
   const [searchText, setSearchText] = useState('')
   const [groupIdFilter, setGroupIdFilter] = useState<string>('all')
   const [editorOpen, setEditorOpen] = useState(false)
+  const [manageView, setManageView] = useState<ManageView>('create')
   const [newGroupLabel, setNewGroupLabel] = useState('')
   const [title, setTitle] = useState('')
   const [command, setCommand] = useState('')
@@ -160,6 +171,8 @@ export const CommandSearchPanel = ({
   const [draggingEntryId, setDraggingEntryId] = useState<string | null>(null)
   const [runtimeById, setRuntimeById] = useState<Record<string, RuntimeCommandState>>({})
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>({})
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+  const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([])
 
   const filtered = useMemo(() => {
     const keyword = searchText.trim().toLocaleLowerCase()
@@ -183,6 +196,18 @@ export const CommandSearchPanel = ({
     return null
   }
 
+  const toggleGroupSelection = (groupId: string): void => {
+    setSelectedGroupIds((previous) =>
+      previous.includes(groupId) ? previous.filter((id) => id !== groupId) : [...previous, groupId],
+    )
+  }
+
+  const toggleEntrySelection = (entryId: string): void => {
+    setSelectedEntryIds((previous) =>
+      previous.includes(entryId) ? previous.filter((id) => id !== entryId) : [...previous, entryId],
+    )
+  }
+
   return (
     <aside className="command-search-panel" role="dialog" aria-label="Command search">
       <div className="command-search-header">
@@ -191,6 +216,12 @@ export const CommandSearchPanel = ({
           <div className="command-search-subtitle">支持自定义命令与自定义分组</div>
         </div>
         <div className="session-panel-header-actions">
+          <button
+            className={`command-search-close${editorOpen ? ' toolbar-button-active' : ''}`}
+            onClick={() => setEditorOpen((prev) => !prev)}
+          >
+            {editorOpen ? '退出管理' : '管理+'}
+          </button>
           <button className="command-search-close" onClick={onResetSystemEntries}>
             重置系统项
           </button>
@@ -200,6 +231,7 @@ export const CommandSearchPanel = ({
         </div>
       </div>
 
+      {!editorOpen && (
       <div className="command-search-toolbar">
         <input
           className="command-search-input-lg"
@@ -239,26 +271,45 @@ export const CommandSearchPanel = ({
               >
                 {group.label}
               </button>
-              {group.id === 'shell' && (
-                <button
-                  className={`command-search-manage-toggle${editorOpen ? ' command-search-manage-toggle-active' : ''}`}
-                  onClick={() => setEditorOpen((prev) => !prev)}
-                  draggable
-                  onDragStart={() => setDraggingGroupId(group.id)}
-                  onDragEnd={() => setDraggingGroupId(null)}
-                  title="创建分组与新增命令"
-                >
-                  {editorOpen ? '收起管理' : '管理+'}
-                </button>
-              )}
             </div>
           ))}
         </div>
         <div className="command-search-summary">命中 {filtered.length} 条</div>
       </div>
+      )}
 
       {editorOpen && (
         <div className="command-editor-panel">
+          <div className="session-editor-row">
+            <button className="session-action session-action-primary" onClick={onExportData}>
+              数据交换：导出
+            </button>
+            <button className="session-action" onClick={onImportData}>
+              数据交换：导入
+            </button>
+          </div>
+          <div className="session-editor-row session-manage-tabs">
+            <button
+              className={`session-action${manageView === 'create' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('create')}
+            >
+              新增
+            </button>
+            <button
+              className={`session-action${manageView === 'groups' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('groups')}
+            >
+              批量删类目
+            </button>
+            <button
+              className={`session-action${manageView === 'entries' ? ' session-action-primary' : ''}`}
+              onClick={() => setManageView('entries')}
+            >
+              批量删条目
+            </button>
+          </div>
+          {manageView === 'create' && (
+          <>
           <div className="command-editor-title">新增分组</div>
           <div className="command-editor-row">
             <input
@@ -377,9 +428,88 @@ export const CommandSearchPanel = ({
               添加命令
             </button>
           </div>
+          </>
+          )}
+          {manageView === 'groups' && (
+            <>
+              <div className="command-editor-title">批量删除类目</div>
+              <div className="command-modal-list-scroll">
+                {config.groups.filter((group) => !group.system).map((group) => (
+                  <label key={group.id} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedGroupIds.includes(group.id)}
+                        onChange={() => toggleGroupSelection(group.id)}
+                      />
+                      {' '}
+                      {group.label} ({group.id})
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedGroupIds.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定批量删除 ${selectedGroupIds.length} 个类目？其下条目会一起删除。`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteGroups(selectedGroupIds)
+                    setSelectedGroupIds([])
+                  }}
+                >
+                  批量删除类目
+                </button>
+              </div>
+            </>
+          )}
+          {manageView === 'entries' && (
+            <>
+              <div className="command-editor-title">批量删除条目</div>
+              <div className="command-modal-list-scroll">
+                {config.entries.map((entry) => (
+                  <label key={entry.id} className="command-runtime-param">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={selectedEntryIds.includes(entry.id)}
+                        onChange={() => toggleEntrySelection(entry.id)}
+                      />
+                      {' '}
+                      {entry.title}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="command-editor-actions">
+                <button
+                  className="command-editor-button command-search-action-danger"
+                  onClick={() => {
+                    if (selectedEntryIds.length === 0) {
+                      return
+                    }
+                    const confirmed = window.confirm(`确定批量删除 ${selectedEntryIds.length} 个条目？`)
+                    if (!confirmed) {
+                      return
+                    }
+                    onBulkDeleteEntries(selectedEntryIds)
+                    setSelectedEntryIds([])
+                  }}
+                >
+                  批量删除条目
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
+      {!editorOpen && (
       <div className="command-search-list" role="list">
         {filtered.length === 0 && <div className="command-search-empty">没有找到匹配命令</div>}
         {filtered.map((entry) => {
@@ -553,6 +683,7 @@ export const CommandSearchPanel = ({
           )
         })}
       </div>
+      )}
     </aside>
   )
 }

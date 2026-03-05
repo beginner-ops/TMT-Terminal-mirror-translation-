@@ -1,31 +1,32 @@
-import { app as E, ipcMain as h, dialog as K, BrowserWindow as ke } from "electron";
-import { fileURLToPath as Ue } from "node:url";
-import v from "node:path";
-import pe from "node:os";
-import x from "node:fs";
-import De from "node:net";
-import { randomUUID as Oe, createHash as He, createHmac as Le } from "node:crypto";
-import Ge from "node-pty";
-const X = v.dirname(Ue(import.meta.url)), We = x.existsSync(v.join(X, "preload.mjs")) ? v.join(X, "preload.mjs") : v.join(X, "preload.js");
-let w = null;
-const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
-  const t = j.get(e);
-  return t ? (t.socket.destroy(), j.delete(e), !0) : !1;
+import { app as E, ipcMain as v, dialog as M, BrowserWindow as Oe } from "electron";
+import { fileURLToPath as De } from "node:url";
+import h from "node:path";
+import Y from "node:os";
+import T from "node:fs";
+import He from "node:net";
+import { randomUUID as Le, createHash as Ge, createHmac as je } from "node:crypto";
+import We from "node-pty";
+const q = h.dirname(De(import.meta.url)), Ze = T.existsSync(h.join(q, "preload.mjs")) ? h.join(q, "preload.mjs") : h.join(q, "preload.js");
+let x = null;
+const fe = "TMT-Terminal-mirror-translation", A = /* @__PURE__ */ new Map(), z = /* @__PURE__ */ new Map(), X = (e) => {
+  const t = z.get(e);
+  return t ? (t.socket.destroy(), z.delete(e), !0) : !1;
 }, ye = (e, t) => {
   if (t.length === 0)
     return;
-  const n = S.get(e);
+  const n = A.get(e);
   if (n) {
     n.write(t);
     return;
   }
-  const o = j.get(e);
+  const o = z.get(e);
   if (o)
     try {
-      o.socket.write(t);
+      const r = o.protocol === "telnet" ? t.replace(/\x7f/g, "\b") : t;
+      o.socket.write(r);
     } catch {
     }
-}, he = "glossary.json", me = "contexts.json", we = "translation.config.json", ve = "translation.config.local", g = {
+}, me = "glossary.json", we = "contexts.json", ve = "translation.config.json", xe = "translation.config.local", u = {
   version: 1,
   defaultProvider: "google-free",
   timeoutMs: 12e3,
@@ -64,7 +65,7 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
       secretKeyEnv: "TENCENT_SECRET_KEY"
     }
   }
-}, J = {
+}, B = {
   version: 1,
   defaultContextId: "shell",
   contexts: [
@@ -197,7 +198,7 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
       order: 3
     }
   ]
-}, ee = (e, t = "exact") => e === "exact" || e === "caseInsensitive" || e === "pattern" ? e : t, te = (e) => e === "network-cisco" || e === "network-huawei" || e === "network-h3c" || e === "network-ruijie" || e === "common" ? e : "common", xe = (e, t) => {
+}, ne = (e, t = "exact") => e === "exact" || e === "caseInsensitive" || e === "pattern" ? e : t, oe = (e) => e === "network-cisco" || e === "network-huawei" || e === "network-h3c" || e === "network-ruijie" || e === "common" ? e : "common", Te = (e, t) => {
   if (typeof e != "string")
     return t;
   const n = e.trim();
@@ -205,32 +206,32 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
     return t;
   const o = Date.parse(n);
   return Number.isNaN(o) ? t : new Date(o).toISOString();
-}, Y = (e) => {
-  const t = e.source.trim(), n = ee(e.matchType, "exact"), o = typeof e.caseInsensitive == "boolean" ? e.caseInsensitive : n === "caseInsensitive", r = o ? t.toLocaleLowerCase() : t;
-  return `${te(e.domain)}:${n}:${o ? "i" : "s"}:${r}`;
-}, ne = (e, t = {}) => {
+}, Q = (e) => {
+  const t = e.source.trim(), n = ne(e.matchType, "exact"), o = typeof e.caseInsensitive == "boolean" ? e.caseInsensitive : n === "caseInsensitive", r = o ? t.toLocaleLowerCase() : t;
+  return `${oe(e.domain)}:${n}:${o ? "i" : "s"}:${r}`;
+}, re = (e, t = {}) => {
   const n = /* @__PURE__ */ new Map(), o = t.legacyDefaultCaseInsensitive ? "caseInsensitive" : "exact";
   for (const r of e) {
     const s = r.source.trim(), i = r.target.trim();
     if (s.length < 2 || i.length === 0)
       continue;
-    const c = (/* @__PURE__ */ new Date()).toISOString(), l = ee(r.matchType, o), a = typeof r.caseInsensitive == "boolean" ? r.caseInsensitive : l === "caseInsensitive", d = typeof r.note == "string" ? r.note.trim() : "", T = typeof r.id == "string" && r.id.trim().length > 0 ? r.id.trim() : Oe(), y = xe(r.createdAt, c), p = xe(r.updatedAt, c), u = te(r.domain), m = {
-      id: T,
+    const c = (/* @__PURE__ */ new Date()).toISOString(), d = ne(r.matchType, o), a = typeof r.caseInsensitive == "boolean" ? r.caseInsensitive : d === "caseInsensitive", l = typeof r.note == "string" ? r.note.trim() : "", b = typeof r.id == "string" && r.id.trim().length > 0 ? r.id.trim() : Le(), m = Te(r.createdAt, c), p = Te(r.updatedAt, c), g = oe(r.domain), y = {
+      id: b,
       source: s,
       target: i,
-      matchType: l,
+      matchType: d,
       caseInsensitive: a,
-      note: d,
-      domain: u,
-      createdAt: y,
+      note: l,
+      domain: g,
+      createdAt: m,
       updatedAt: p,
       uiOnly: typeof r.uiOnly == "boolean" ? r.uiOnly : void 0,
       wholeWord: typeof r.wholeWord == "boolean" ? r.wholeWord : void 0
     };
-    n.set(Y(m), m);
+    n.set(Q(y), y);
   }
   return Array.from(n.values());
-}, Te = (e) => {
+}, be = (e) => {
   const t = [];
   for (const n of e) {
     if (typeof n != "object" || !n)
@@ -240,65 +241,65 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
       id: typeof n.id == "string" ? n.id : void 0,
       source: o,
       target: r,
-      matchType: ee(n.matchType, "caseInsensitive"),
+      matchType: ne(n.matchType, "caseInsensitive"),
       caseInsensitive: typeof n.caseInsensitive == "boolean" ? n.caseInsensitive : void 0,
       note: typeof n.note == "string" ? n.note : void 0,
-      domain: te(n.domain),
+      domain: oe(n.domain),
       createdAt: typeof n.createdAt == "string" ? n.createdAt : void 0,
       updatedAt: typeof n.updatedAt == "string" ? n.updatedAt : void 0,
       uiOnly: typeof n.uiOnly == "boolean" ? n.uiOnly : void 0,
       wholeWord: typeof n.wholeWord == "boolean" ? n.wholeWord : void 0
     });
   }
-  return ne(t, { legacyDefaultCaseInsensitive: !0 });
-}, je = (e) => {
+  return re(t, { legacyDefaultCaseInsensitive: !0 });
+}, $e = (e) => {
   const t = JSON.parse(e);
   if (Array.isArray(t))
-    return Te(t);
+    return be(t);
   if (typeof t == "object" && t !== null && Array.isArray(t.entries))
-    return Te(t.entries);
+    return be(t.entries);
   if (typeof t == "object" && t !== null) {
     const n = [];
     for (const [o, r] of Object.entries(t))
       typeof r == "string" && n.push({ source: o, target: r, matchType: "caseInsensitive", caseInsensitive: !0 });
-    return ne(n, { legacyDefaultCaseInsensitive: !0 });
+    return re(n, { legacyDefaultCaseInsensitive: !0 });
   }
   return [];
-}, Ze = () => E.isPackaged ? v.join(E.getPath("userData"), he) : v.join(process.cwd(), he), z = (e, t) => {
+}, Je = () => E.isPackaged ? h.join(E.getPath("userData"), me) : h.join(process.cwd(), me), N = (e, t) => {
   const o = {
     version: 2,
-    entries: ne(t)
+    entries: re(t)
   };
-  x.writeFileSync(e, `${JSON.stringify(o, null, 2)}
+  T.writeFileSync(e, `${JSON.stringify(o, null, 2)}
 `, "utf8");
-}, oe = () => {
-  const e = Ze();
-  return x.existsSync(e) || z(e, []), e;
-}, B = () => {
-  const e = oe();
+}, se = () => {
+  const e = Je();
+  return T.existsSync(e) || N(e, []), e;
+}, V = () => {
+  const e = se();
   try {
-    const t = x.readFileSync(e, "utf8"), n = je(t);
-    return z(e, n), {
+    const t = T.readFileSync(e, "utf8"), n = $e(t);
+    return N(e, n), {
       path: e,
       entries: n
     };
   } catch {
-    return z(e, []), {
+    return N(e, []), {
       path: e,
       entries: []
     };
   }
-}, Je = (e) => {
+}, Be = (e) => {
   try {
-    const t = x.readFileSync(e, "utf8"), n = je(t), o = oe();
-    return z(o, n), {
+    const t = T.readFileSync(e, "utf8"), n = $e(t), o = se();
+    return N(o, n), {
       path: o,
       entries: n
     };
   } catch {
     return null;
   }
-}, Be = (e) => {
+}, Ve = (e) => {
   if (typeof e != "object" || e === null)
     throw new Error("Invalid glossary payload");
   const t = e.source, n = e.target;
@@ -307,84 +308,84 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
   const o = t.trim(), r = n.trim();
   if (o.length < 2 || r.length === 0)
     throw new Error("Glossary source or target is empty");
-  const s = (/* @__PURE__ */ new Date()).toISOString(), i = e.id, c = typeof i == "string" && i.trim().length > 0 ? i.trim() : "", l = ee(e.matchType, "exact"), a = e.caseInsensitive, d = typeof a == "boolean" ? a : l === "caseInsensitive", T = e.note, y = typeof T == "string" ? T.trim() : "", p = te(e.domain), u = {
-    id: c.length > 0 ? c : Oe(),
+  const s = (/* @__PURE__ */ new Date()).toISOString(), i = e.id, c = typeof i == "string" && i.trim().length > 0 ? i.trim() : "", d = ne(e.matchType, "exact"), a = e.caseInsensitive, l = typeof a == "boolean" ? a : d === "caseInsensitive", b = e.note, m = typeof b == "string" ? b.trim() : "", p = oe(e.domain), g = {
+    id: c.length > 0 ? c : Le(),
     source: o,
     target: r,
-    matchType: l,
-    caseInsensitive: d,
-    note: y,
+    matchType: d,
+    caseInsensitive: l,
+    note: m,
     domain: p,
     createdAt: s,
     updatedAt: s,
     uiOnly: typeof e.uiOnly == "boolean" ? e.uiOnly : void 0,
     wholeWord: typeof e.wholeWord == "boolean" ? e.wholeWord : void 0
-  }, m = oe(), I = B(), b = Y(u), k = c.length > 0 ? I.entries.find((C) => C.id === c) ?? null : null, O = I.entries.find((C) => Y(C) === b) ?? null, L = k ?? O, $ = {
-    ...u,
-    id: L?.id ?? u.id,
-    createdAt: L?.createdAt ?? s,
+  }, y = se(), w = V(), C = Q(g), k = c.length > 0 ? w.entries.find((I) => I.id === c) ?? null : null, S = w.entries.find((I) => Q(I) === C) ?? null, P = k ?? S, O = {
+    ...g,
+    id: P?.id ?? g.id,
+    createdAt: P?.createdAt ?? s,
     updatedAt: s
-  }, R = I.entries.filter((C) => L && C.id === L.id ? !1 : Y(C) !== b), N = ne([...R, $]);
-  return z(m, N), {
-    path: m,
-    entries: N
+  }, L = w.entries.filter((I) => P && I.id === P.id ? !1 : Q(I) !== C), R = re([...L, O]);
+  return N(y, R), {
+    path: y,
+    entries: R
   };
-}, Ve = (e) => {
+}, Xe = (e) => {
   if (typeof e != "object" || e === null)
     throw new Error("Invalid glossary delete payload");
   const t = e.id;
   if (typeof t != "string" || t.trim().length === 0)
     throw new Error("Invalid glossary entry id");
-  const n = t.trim(), o = oe(), r = B(), s = r.entries.filter((i) => i.id !== n);
+  const n = t.trim(), o = se(), r = V(), s = r.entries.filter((i) => i.id !== n);
   return s.length === r.entries.length ? {
     path: o,
     entries: r.entries
-  } : (z(o, s), {
+  } : (N(o, s), {
     path: o,
     entries: s
   });
-}, fe = (e) => {
+}, ue = (e) => {
   const t = e.trim().toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   return t.length > 0 ? t : "shell";
-}, Xe = (e) => {
+}, Ye = (e) => {
   const t = /* @__PURE__ */ new Set();
   for (const n of e) {
     const o = n.trim().toLocaleLowerCase();
     o.length < 2 || t.add(o);
   }
   return Array.from(t);
-}, be = (e) => e === "shell" ? ["zsh", "bash", "shell", "$ ", "% ", "# ", "pwd", "ls -"] : e === "opencode" ? ["opencode", "ask anything", "tip press", "/plan", "/task", "/help"] : e === "codex" ? ["codex", "gpt-5.3-codex", "/apply_patch", "/check", "/help"] : [], Ye = (e) => {
+}, Ce = (e) => e === "shell" ? ["zsh", "bash", "shell", "$ ", "% ", "# ", "pwd", "ls -"] : e === "opencode" ? ["opencode", "ask anything", "tip press", "/plan", "/task", "/help"] : e === "codex" ? ["codex", "gpt-5.3-codex", "/apply_patch", "/check", "/help"] : [], qe = (e) => {
   const t = /* @__PURE__ */ new Map();
   for (const n of e) {
-    const o = fe(n.id), r = n.label.trim();
+    const o = ue(n.id), r = n.label.trim();
     r.length !== 0 && t.set(o, {
       id: o,
       label: r,
-      detectHints: Xe([...be(o), ...n.detectHints])
+      detectHints: Ye([...Ce(o), ...n.detectHints])
     });
   }
   return t.has("shell") || t.set("shell", {
     id: "shell",
     label: "Shell",
-    detectHints: be("shell")
+    detectHints: Ce("shell")
   }), Array.from(t.values());
-}, $e = (e) => e === "sendKey" || e === "sendAnsi" || e === "sendText" ? e : "sendText", ze = (e) => e === "caution" || e === "destructive" || e === "safe" ? e : "safe", qe = (e, t) => {
+}, ze = (e) => e === "sendKey" || e === "sendAnsi" || e === "sendText" ? e : "sendText", Re = (e) => e === "caution" || e === "destructive" || e === "safe" ? e : "safe", Qe = (e, t) => {
   const n = [], o = /* @__PURE__ */ new Set();
   for (const i of e) {
-    const c = fe(i.contextId);
+    const c = ue(i.contextId);
     if (!t.has(c))
       continue;
-    const l = i.labelZh.trim(), a = i.payload;
-    if (l.length === 0 || a.length === 0)
+    const d = i.labelZh.trim(), a = i.payload;
+    if (d.length === 0 || a.length === 0)
       continue;
-    let d = i.id.trim();
-    (d.length === 0 || o.has(d)) && (d = `${c}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`), o.add(d), n.push({
-      id: d,
-      labelZh: l,
-      actionType: $e(i.actionType),
+    let l = i.id.trim();
+    (l.length === 0 || o.has(l)) && (l = `${c}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`), o.add(l), n.push({
+      id: l,
+      labelZh: d,
+      actionType: ze(i.actionType),
       payload: a,
       contextId: c,
-      risk: ze(i.risk),
+      risk: Re(i.risk),
       order: Number.isFinite(i.order) ? Math.max(1, Math.floor(i.order)) : n.length + 1
     });
   }
@@ -399,72 +400,72 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
   }
   const s = [];
   for (const [i, c] of r.entries())
-    c.sort((l, a) => l.order !== a.order ? l.order - a.order : l.labelZh.localeCompare(a.labelZh)).forEach((l, a) => {
+    c.sort((d, a) => d.order !== a.order ? d.order - a.order : d.labelZh.localeCompare(a.labelZh)).forEach((d, a) => {
       s.push({
-        ...l,
+        ...d,
         contextId: i,
         order: a + 1
       });
     });
   return s;
-}, q = (e) => {
+}, ee = (e) => {
   if (typeof e != "object" || e === null)
-    return { ...J };
-  const t = e, n = Array.isArray(t.contexts) ? t.contexts : J.contexts, o = Ye(
+    return { ...B };
+  const t = e, n = Array.isArray(t.contexts) ? t.contexts : B.contexts, o = qe(
     n.map((a) => {
       if (typeof a != "object" || a === null)
         return null;
-      const d = a.id, T = a.label, y = a.detectHints;
-      if (typeof d != "string" || typeof T != "string")
+      const l = a.id, b = a.label, m = a.detectHints;
+      if (typeof l != "string" || typeof b != "string")
         return null;
-      const p = Array.isArray(y) ? y.filter((u) => typeof u == "string") : [];
-      return { id: d, label: T, detectHints: p };
+      const p = Array.isArray(m) ? m.filter((g) => typeof g == "string") : [];
+      return { id: l, label: b, detectHints: p };
     }).filter((a) => a !== null)
-  ), r = new Set(o.map((a) => a.id)), s = Array.isArray(t.buttons) ? t.buttons : J.buttons, i = qe(
+  ), r = new Set(o.map((a) => a.id)), s = Array.isArray(t.buttons) ? t.buttons : B.buttons, i = Qe(
     s.map((a) => {
       if (typeof a != "object" || a === null)
         return null;
-      const d = a;
-      return typeof d.labelZh != "string" || typeof d.payload != "string" || typeof d.contextId != "string" ? null : {
-        id: typeof d.id == "string" ? d.id : "",
-        labelZh: d.labelZh,
-        actionType: $e(d.actionType),
-        payload: d.payload,
-        contextId: d.contextId,
-        risk: ze(d.risk),
-        order: typeof d.order == "number" ? d.order : 0
+      const l = a;
+      return typeof l.labelZh != "string" || typeof l.payload != "string" || typeof l.contextId != "string" ? null : {
+        id: typeof l.id == "string" ? l.id : "",
+        labelZh: l.labelZh,
+        actionType: ze(l.actionType),
+        payload: l.payload,
+        contextId: l.contextId,
+        risk: Re(l.risk),
+        order: typeof l.order == "number" ? l.order : 0
       };
     }).filter((a) => a !== null),
     r
-  ), c = typeof t.defaultContextId == "string" ? fe(t.defaultContextId) : "shell";
+  ), c = typeof t.defaultContextId == "string" ? ue(t.defaultContextId) : "shell";
   return {
     version: 1,
     defaultContextId: r.has(c) ? c : "shell",
     contexts: o,
     buttons: i
   };
-}, Qe = () => E.isPackaged ? v.join(E.getPath("userData"), me) : v.join(process.cwd(), me), ue = (e, t) => {
-  x.writeFileSync(e, `${JSON.stringify(q(t), null, 2)}
+}, et = () => E.isPackaged ? h.join(E.getPath("userData"), we) : h.join(process.cwd(), we), ge = (e, t) => {
+  T.writeFileSync(e, `${JSON.stringify(ee(t), null, 2)}
 `, "utf8");
-}, Re = () => {
-  const e = Qe();
-  return x.existsSync(e) || ue(e, J), e;
-}, Ce = () => {
-  const e = Re();
+}, Ne = () => {
+  const e = et();
+  return T.existsSync(e) || ge(e, B), e;
+}, Se = () => {
+  const e = Ne();
   try {
-    const t = x.readFileSync(e, "utf8"), n = JSON.parse(t), o = q(n);
+    const t = T.readFileSync(e, "utf8"), n = JSON.parse(t), o = ee(n);
     return { path: e, config: o };
   } catch {
-    const t = q(J);
-    return ue(e, t), { path: e, config: t };
+    const t = ee(B);
+    return ge(e, t), { path: e, config: t };
   }
-}, et = (e) => {
-  const t = Re(), n = q(e);
-  return ue(t, n), {
+}, tt = (e) => {
+  const t = Ne(), n = ee(e);
+  return ge(t, n), {
     path: t,
     config: n
   };
-}, f = (e) => typeof e != "object" || e === null ? null : e, Ne = (e, t = g.defaultProvider) => e === "google-free" || e === "openai-compatible" || e === "tencent-tmt" ? e : t, tt = (e) => Array.isArray(e) ? e.map((n) => n === "google-free" || n === "openai-compatible" || n === "tencent-tmt" ? n : null).filter((n) => n !== null).filter((n, o, r) => r.indexOf(n) === o) : [], F = (e, t) => {
+}, f = (e) => typeof e != "object" || e === null ? null : e, Ke = (e, t = u.defaultProvider) => e === "google-free" || e === "openai-compatible" || e === "tencent-tmt" ? e : t, nt = (e) => Array.isArray(e) ? e.map((n) => n === "google-free" || n === "openai-compatible" || n === "tencent-tmt" ? n : null).filter((n) => n !== null).filter((n, o, r) => r.indexOf(n) === o) : [], F = (e, t) => {
   if (typeof e != "string")
     return t;
   const n = e.trim();
@@ -476,82 +477,82 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
   } catch {
     return t;
   }
-}, nt = (e, t) => {
+}, ot = (e, t) => {
   const n = Array.isArray(e) ? e.filter((s) => typeof s == "string") : [], r = (n.length > 0 ? n : t).map((s) => F(s, "")).filter((s) => s.length > 0);
   return r.length === 0 ? t : Array.from(new Set(r));
-}, Ke = (e, t) => {
-  if (typeof e != "number" || !Number.isFinite(e))
-    return t;
-  const n = Math.floor(e);
-  return n < 1500 ? 1500 : n > 6e4 ? 6e4 : n;
 }, Me = (e, t) => {
   if (typeof e != "number" || !Number.isFinite(e))
     return t;
   const n = Math.floor(e);
+  return n < 1500 ? 1500 : n > 6e4 ? 6e4 : n;
+}, _e = (e, t) => {
+  if (typeof e != "number" || !Number.isFinite(e))
+    return t;
+  const n = Math.floor(e);
   return n < 0 ? t : n;
-}, M = (e) => {
-  const t = f(e), n = f(t?.providers), o = f(n?.googleFree), r = f(n?.openaiCompatible), s = f(n?.tencentTmt), i = Ne(t?.defaultProvider), c = tt(t?.fallbackProviders).filter(
-    (P) => P !== i
-  ), l = Ke(t?.timeoutMs, g.timeoutMs), a = f(t?.mirror), d = f(a?.skipRules), T = Array.isArray(a?.localMatchPriority) ? a?.localMatchPriority : [], y = [];
-  for (const P of T)
-    P !== "exact" && P !== "caseInsensitive" && P !== "pattern" || y.includes(P) || y.push(P);
-  for (const P of g.mirror.localMatchPriority)
-    y.includes(P) || y.push(P);
+}, _ = (e) => {
+  const t = f(e), n = f(t?.providers), o = f(n?.googleFree), r = f(n?.openaiCompatible), s = f(n?.tencentTmt), i = Ke(t?.defaultProvider), c = nt(t?.fallbackProviders).filter(
+    (j) => j !== i
+  ), d = Me(t?.timeoutMs, u.timeoutMs), a = f(t?.mirror), l = f(a?.skipRules), b = Array.isArray(a?.localMatchPriority) ? a?.localMatchPriority : [], m = [];
+  for (const j of b)
+    j !== "exact" && j !== "caseInsensitive" && j !== "pattern" || m.includes(j) || m.push(j);
+  for (const j of u.mirror.localMatchPriority)
+    m.includes(j) || m.push(j);
   const p = {
     skipRules: {
-      stackLike: typeof d?.stackLike == "boolean" ? d.stackLike : g.mirror.skipRules.stackLike,
-      symbolOnly: typeof d?.symbolOnly == "boolean" ? d.symbolOnly : g.mirror.skipRules.symbolOnly,
-      protectedOnly: typeof d?.protectedOnly == "boolean" ? d.protectedOnly : g.mirror.skipRules.protectedOnly,
-      outOfViewport: typeof d?.outOfViewport == "boolean" ? d.outOfViewport : g.mirror.skipRules.outOfViewport
+      stackLike: typeof l?.stackLike == "boolean" ? l.stackLike : u.mirror.skipRules.stackLike,
+      symbolOnly: typeof l?.symbolOnly == "boolean" ? l.symbolOnly : u.mirror.skipRules.symbolOnly,
+      protectedOnly: typeof l?.protectedOnly == "boolean" ? l.protectedOnly : u.mirror.skipRules.protectedOnly,
+      outOfViewport: typeof l?.outOfViewport == "boolean" ? l.outOfViewport : u.mirror.skipRules.outOfViewport
     },
-    localMatchPriority: y,
-    fallbackUiOnly: typeof a?.fallbackUiOnly == "boolean" ? a.fallbackUiOnly : g.mirror.fallbackUiOnly
-  }, u = F(o?.endpoint, g.providers.googleFree.endpoint), m = nt(
+    localMatchPriority: m,
+    fallbackUiOnly: typeof a?.fallbackUiOnly == "boolean" ? a.fallbackUiOnly : u.mirror.fallbackUiOnly
+  }, g = F(o?.endpoint, u.providers.googleFree.endpoint), y = ot(
     o?.endpoints,
-    g.providers.googleFree.endpoints
+    u.providers.googleFree.endpoints
   );
-  m.includes(u) || m.unshift(u);
-  const I = F(
+  y.includes(g) || y.unshift(g);
+  const w = F(
     r?.baseUrl,
-    g.providers.openaiCompatible.baseUrl
-  ), b = r?.model, k = typeof b == "string" && b.trim().length > 0 ? b.trim() : g.providers.openaiCompatible.model, O = r?.apiKeyEnv, L = typeof O == "string" && O.trim().length > 0 ? O.trim() : g.providers.openaiCompatible.apiKeyEnv, $ = r?.apiKey, R = typeof $ == "string" && $.trim().length > 0 ? $.trim() : void 0, N = F(
+    u.providers.openaiCompatible.baseUrl
+  ), C = r?.model, k = typeof C == "string" && C.trim().length > 0 ? C.trim() : u.providers.openaiCompatible.model, S = r?.apiKeyEnv, P = typeof S == "string" && S.trim().length > 0 ? S.trim() : u.providers.openaiCompatible.apiKeyEnv, O = r?.apiKey, L = typeof O == "string" && O.trim().length > 0 ? O.trim() : void 0, R = F(
     s?.endpoint,
-    g.providers.tencentTmt.endpoint
-  ), C = s?.region, re = typeof C == "string" && C.trim().length > 0 ? C.trim() : g.providers.tencentTmt.region, _ = s?.source, se = typeof _ == "string" && _.trim().length > 0 ? _.trim() : g.providers.tencentTmt.source, U = s?.target, ie = typeof U == "string" && U.trim().length > 0 ? U.trim() : g.providers.tencentTmt.target, ae = Me(
+    u.providers.tencentTmt.endpoint
+  ), I = s?.region, K = typeof I == "string" && I.trim().length > 0 ? I.trim() : u.providers.tencentTmt.region, U = s?.source, ie = typeof U == "string" && U.trim().length > 0 ? U.trim() : u.providers.tencentTmt.source, D = s?.target, ae = typeof D == "string" && D.trim().length > 0 ? D.trim() : u.providers.tencentTmt.target, ce = _e(
     s?.projectId,
-    g.providers.tencentTmt.projectId
-  ), D = s?.secretIdEnv, ce = typeof D == "string" && D.trim().length > 0 ? D.trim() : g.providers.tencentTmt.secretIdEnv, H = s?.secretKeyEnv, G = typeof H == "string" && H.trim().length > 0 ? H.trim() : g.providers.tencentTmt.secretKeyEnv, A = s?.secretId, W = typeof A == "string" && A.trim().length > 0 ? A.trim() : void 0, Z = s?.secretKey, le = typeof Z == "string" && Z.trim().length > 0 ? Z.trim() : void 0;
+    u.providers.tencentTmt.projectId
+  ), H = s?.secretIdEnv, le = typeof H == "string" && H.trim().length > 0 ? H.trim() : u.providers.tencentTmt.secretIdEnv, G = s?.secretKeyEnv, W = typeof G == "string" && G.trim().length > 0 ? G.trim() : u.providers.tencentTmt.secretKeyEnv, $ = s?.secretId, Z = typeof $ == "string" && $.trim().length > 0 ? $.trim() : void 0, J = s?.secretKey, de = typeof J == "string" && J.trim().length > 0 ? J.trim() : void 0;
   return {
     version: 1,
     defaultProvider: i,
     fallbackProviders: c,
-    timeoutMs: l,
+    timeoutMs: d,
     mirror: p,
     providers: {
       googleFree: {
-        endpoint: u,
-        endpoints: m
+        endpoint: g,
+        endpoints: y
       },
       openaiCompatible: {
-        baseUrl: I,
+        baseUrl: w,
         model: k,
-        apiKeyEnv: L,
-        apiKey: R
+        apiKeyEnv: P,
+        apiKey: L
       },
       tencentTmt: {
-        endpoint: N,
-        region: re,
-        source: se,
-        target: ie,
-        projectId: ae,
-        secretIdEnv: ce,
-        secretKeyEnv: G,
-        secretId: W,
-        secretKey: le
+        endpoint: R,
+        region: K,
+        source: ie,
+        target: ae,
+        projectId: ce,
+        secretIdEnv: le,
+        secretKeyEnv: W,
+        secretId: Z,
+        secretKey: de
       }
     }
   };
-}, ot = () => E.isPackaged ? v.join(E.getPath("userData"), we) : v.join(process.cwd(), we), rt = () => E.isPackaged ? v.join(E.getPath("userData"), ve) : v.join(process.cwd(), ve), Se = (e, t) => {
+}, rt = () => E.isPackaged ? h.join(E.getPath("userData"), ve) : h.join(process.cwd(), ve), st = () => E.isPackaged ? h.join(E.getPath("userData"), xe) : h.join(process.cwd(), xe), Ie = (e, t) => {
   const n = f(e) ?? {}, o = f(t);
   if (!o)
     return n;
@@ -577,42 +578,42 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
     }
   };
 }, Ee = () => {
-  const e = rt();
-  if (!x.existsSync(e))
+  const e = st();
+  if (!T.existsSync(e))
     return null;
   try {
-    const t = x.readFileSync(e, "utf8");
+    const t = T.readFileSync(e, "utf8");
     return JSON.parse(t);
   } catch {
     return null;
   }
-}, Q = (e, t) => {
-  const n = M(t);
-  x.writeFileSync(e, `${JSON.stringify(n, null, 2)}
+}, te = (e, t) => {
+  const n = _(t);
+  T.writeFileSync(e, `${JSON.stringify(n, null, 2)}
 `, "utf8");
 }, Fe = () => {
-  const e = ot();
-  return x.existsSync(e) || Q(e, g), e;
-}, _e = () => {
+  const e = rt();
+  return T.existsSync(e) || te(e, u), e;
+}, Ue = () => {
   const e = Fe();
   try {
-    const t = x.readFileSync(e, "utf8"), n = JSON.parse(t), o = M(n);
-    Q(e, o);
-    const r = Ee(), s = r ? M(Se(o, r)) : o;
+    const t = T.readFileSync(e, "utf8"), n = JSON.parse(t), o = _(n);
+    te(e, o);
+    const r = Ee(), s = r ? _(Ie(o, r)) : o;
     return { path: e, config: s };
   } catch {
-    const t = M(g);
-    Q(e, t);
-    const n = Ee(), o = n ? M(Se(t, n)) : t;
+    const t = _(u);
+    te(e, t);
+    const n = Ee(), o = n ? _(Ie(t, n)) : t;
     return { path: e, config: o };
   }
-}, st = (e) => {
-  const t = Fe(), n = M(e);
-  return Q(t, n), {
+}, it = (e) => {
+  const t = Fe(), n = _(e);
+  return te(t, n), {
     path: t,
     config: n
   };
-}, it = (e) => {
+}, at = (e) => {
   if (!Array.isArray(e) || e.length === 0 || !Array.isArray(e[0]))
     throw new Error("Unexpected Google response format");
   const t = e[0].map((n) => {
@@ -624,7 +625,7 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
   if (t.length === 0)
     throw new Error("Google translation result is empty");
   return t;
-}, at = (e) => {
+}, ct = (e) => {
   const n = f(e)?.choices;
   if (!Array.isArray(n) || n.length === 0)
     throw new Error("OpenAI response missing choices");
@@ -633,17 +634,17 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
     return s.trim();
   if (Array.isArray(s)) {
     const i = s.map((c) => {
-      const l = f(c), a = l?.type, d = l?.text;
-      return a === "text" && typeof d == "string" ? d : "";
+      const d = f(c), a = d?.type, l = d?.text;
+      return a === "text" && typeof l == "string" ? l : "";
     }).join("").trim();
     if (i.length > 0)
       return i;
   }
   throw new Error("OpenAI response missing translated content");
-}, Ie = (e, t) => {
+}, Pe = (e, t) => {
   const n = e.trim().toLocaleLowerCase();
   return n.length === 0 ? t : n === "zh" || n === "zh-cn" || n === "zh-hans" ? "zh" : n === "zh-tw" || n === "zh-hant" ? "zh-TW" : n === "en" || n === "en-us" || n === "en-gb" ? "en" : e;
-}, Pe = (e) => He("sha256").update(e, "utf8").digest("hex"), de = (e, t) => Le("sha256", e).update(t, "utf8").digest(), ct = (e, t) => Le("sha256", e).update(t, "utf8").digest("hex"), ge = async (e, t, n) => {
+}, Ae = (e) => Ge("sha256").update(e, "utf8").digest("hex"), pe = (e, t) => je("sha256", e).update(t, "utf8").digest(), lt = (e, t) => je("sha256", e).update(t, "utf8").digest("hex"), he = async (e, t, n) => {
   const o = new AbortController(), r = setTimeout(() => {
     o.abort();
   }, n);
@@ -654,13 +655,13 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
     });
     if (!s.ok) {
       const c = `HTTP ${s.status}`;
-      let l = c;
+      let d = c;
       try {
-        l = (await s.text()).trim() || c;
+        d = (await s.text()).trim() || c;
       } catch {
-        l = c;
+        d = c;
       }
-      throw new Error(l);
+      throw new Error(d);
     }
     const i = await s.text();
     if (i.trim().length === 0)
@@ -672,8 +673,8 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
       try {
         return JSON.parse(c);
       } catch {
-        const l = c.slice(0, 160).replace(/\s+/g, " ");
-        throw new Error(`Invalid JSON response: ${l}`);
+        const d = c.slice(0, 160).replace(/\s+/g, " ");
+        throw new Error(`Invalid JSON response: ${d}`);
       }
     }
   } catch (s) {
@@ -684,22 +685,22 @@ const S = /* @__PURE__ */ new Map(), j = /* @__PURE__ */ new Map(), V = (e) => {
   } finally {
     clearTimeout(r);
   }
-}, lt = async (e, t, n, o, r) => {
+}, dt = async (e, t, n, o, r) => {
   const s = Array.from(
     /* @__PURE__ */ new Set([o.providers.googleFree.endpoint, ...o.providers.googleFree.endpoints])
   ), i = [];
   for (const c of s)
     try {
-      const l = new URL(c);
-      l.searchParams.set("client", "gtx"), l.searchParams.set("sl", t), l.searchParams.set("tl", n), l.searchParams.set("dt", "t"), l.searchParams.set("q", e);
-      const a = await ge(l.toString(), { method: "GET" }, r);
-      return it(a);
-    } catch (l) {
-      const a = l.message, d = typeof a == "string" && a.trim().length > 0 ? a.trim() : "unknown error";
-      i.push(`${c} -> ${d}`);
+      const d = new URL(c);
+      d.searchParams.set("client", "gtx"), d.searchParams.set("sl", t), d.searchParams.set("tl", n), d.searchParams.set("dt", "t"), d.searchParams.set("q", e);
+      const a = await he(d.toString(), { method: "GET" }, r);
+      return at(a);
+    } catch (d) {
+      const a = d.message, l = typeof a == "string" && a.trim().length > 0 ? a.trim() : "unknown error";
+      i.push(`${c} -> ${l}`);
     }
   throw new Error(`Google free translation failed: ${i.join(" | ")}`);
-}, dt = async (e, t, n, o, r) => {
+}, pt = async (e, t, n, o, r) => {
   const s = o.providers.openaiCompatible, i = F(e.baseUrl, s.baseUrl).replace(/\/+$/, ""), c = typeof e.apiKey == "string" && e.apiKey.trim().length > 0 ? e.apiKey.trim() : s.apiKey ?? process.env[s.apiKeyEnv] ?? "";
   if (c.length === 0)
     throw new Error(`Missing API key: request.apiKey or env ${s.apiKeyEnv}`);
@@ -719,7 +720,7 @@ Target language: ${n}
 ${e.text}`
       }
     ]
-  }, d = await ge(
+  }, l = await he(
     `${i}/chat/completions`,
     {
       method: "POST",
@@ -731,58 +732,58 @@ ${e.text}`
     },
     r
   );
-  return at(d);
-}, pt = async (e, t, n, o, r) => {
-  const s = o.providers.tencentTmt, i = F(e.baseUrl, s.endpoint), l = new URL(i).host, a = typeof e.region == "string" && e.region.trim().length > 0 ? e.region.trim() : s.region, d = Ie(t, s.source), T = Ie(n, s.target), y = Me(e.projectId, s.projectId), p = typeof e.secretId == "string" && e.secretId.trim().length > 0 ? e.secretId.trim() : s.secretId ?? process.env[s.secretIdEnv] ?? "", u = typeof e.secretKey == "string" && e.secretKey.trim().length > 0 ? e.secretKey.trim() : s.secretKey ?? process.env[s.secretKeyEnv] ?? "";
-  if (p.length === 0 || u.length === 0)
+  return ct(l);
+}, ft = async (e, t, n, o, r) => {
+  const s = o.providers.tencentTmt, i = F(e.baseUrl, s.endpoint), d = new URL(i).host, a = typeof e.region == "string" && e.region.trim().length > 0 ? e.region.trim() : s.region, l = Pe(t, s.source), b = Pe(n, s.target), m = _e(e.projectId, s.projectId), p = typeof e.secretId == "string" && e.secretId.trim().length > 0 ? e.secretId.trim() : s.secretId ?? process.env[s.secretIdEnv] ?? "", g = typeof e.secretKey == "string" && e.secretKey.trim().length > 0 ? e.secretKey.trim() : s.secretKey ?? process.env[s.secretKeyEnv] ?? "";
+  if (p.length === 0 || g.length === 0)
     throw new Error(
       `Missing Tencent credentials: tencentTmt.secretId/secretKey or env ${s.secretIdEnv}/${s.secretKeyEnv}`
     );
-  const m = "TextTranslate", I = "2018-03-21", b = Math.floor(Date.now() / 1e3), k = new Date(b * 1e3).toISOString().slice(0, 10), O = JSON.stringify({
+  const y = "TextTranslate", w = "2018-03-21", C = Math.floor(Date.now() / 1e3), k = new Date(C * 1e3).toISOString().slice(0, 10), S = JSON.stringify({
     SourceText: e.text,
-    Source: d,
-    Target: T,
-    ProjectId: y
-  }), L = Pe(O), $ = `content-type:application/json; charset=utf-8
-host:${l}
-x-tc-action:${m.toLocaleLowerCase()}
-`, R = "content-type;host;x-tc-action", N = `POST
+    Source: l,
+    Target: b,
+    ProjectId: m
+  }), P = Ae(S), O = `content-type:application/json; charset=utf-8
+host:${d}
+x-tc-action:${y.toLocaleLowerCase()}
+`, L = "content-type;host;x-tc-action", R = `POST
 /
 
-${$}
-${R}
-${L}`, C = `${k}/tmt/tc3_request`, re = Pe(N), _ = `TC3-HMAC-SHA256
-${b}
+${O}
+${L}
+${P}`, I = `${k}/tmt/tc3_request`, K = Ae(R), U = `TC3-HMAC-SHA256
 ${C}
-${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae = ct(ie, _), D = `TC3-HMAC-SHA256 Credential=${p}/${C}, SignedHeaders=${R}, Signature=${ae}`, ce = await ge(
+${I}
+${K}`, ie = pe(`TC3${g}`, k), D = pe(ie, "tmt"), ae = pe(D, "tc3_request"), ce = lt(ae, U), H = `TC3-HMAC-SHA256 Credential=${p}/${I}, SignedHeaders=${L}, Signature=${ce}`, le = await he(
     i,
     {
       method: "POST",
       headers: {
-        Authorization: D,
+        Authorization: H,
         "Content-Type": "application/json; charset=utf-8",
-        Host: l,
-        "X-TC-Action": m,
-        "X-TC-Version": I,
+        Host: d,
+        "X-TC-Action": y,
+        "X-TC-Version": w,
         "X-TC-Region": a,
-        "X-TC-Timestamp": String(b)
+        "X-TC-Timestamp": String(C)
       },
-      body: O
+      body: S
     },
     r
-  ), H = f(ce), G = f(H?.Response);
-  if (!G)
+  ), G = f(le), W = f(G?.Response);
+  if (!W)
     throw new Error("Tencent TMT response format invalid");
-  const A = f(G.Error);
-  if (A) {
-    const Z = typeof A.Code == "string" ? A.Code : "UnknownError", le = typeof A.Message == "string" ? A.Message : "Unknown Tencent error";
-    throw new Error(`${Z}: ${le}`);
+  const $ = f(W.Error);
+  if ($) {
+    const J = typeof $.Code == "string" ? $.Code : "UnknownError", de = typeof $.Message == "string" ? $.Message : "Unknown Tencent error";
+    throw new Error(`${J}: ${de}`);
   }
-  const W = G.TargetText;
-  if (typeof W != "string" || W.trim().length === 0)
+  const Z = W.TargetText;
+  if (typeof Z != "string" || Z.trim().length === 0)
     throw new Error("Tencent TMT returned empty translation");
-  return W;
-}, ft = async (e) => {
+  return Z;
+}, ut = async (e) => {
   const t = f(e);
   if (!t)
     throw new Error("Invalid translate request payload");
@@ -792,7 +793,7 @@ ${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae 
   if (n.length === 0)
     return {
       translatedText: "",
-      provider: g.defaultProvider
+      provider: u.defaultProvider
     };
   const o = {
     text: n,
@@ -807,23 +808,23 @@ ${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae 
     secretKey: typeof t.secretKey == "string" ? t.secretKey : void 0,
     region: typeof t.region == "string" ? t.region : void 0,
     projectId: typeof t.projectId == "number" ? t.projectId : void 0
-  }, r = _e().config, i = (o.provider ? Ne(o.provider, r.defaultProvider) : null) ?? r.defaultProvider, c = (r.fallbackProviders ?? []).filter((p) => p !== i), l = [i, ...c].filter(
-    (p, u, m) => m.indexOf(p) === u
-  ), a = Ke(o.timeoutMs, r.timeoutMs), d = (p) => typeof o.sourceLang == "string" && o.sourceLang.trim().length > 0 ? o.sourceLang.trim() : p === "tencent-tmt" ? r.providers.tencentTmt.source : "en", T = (p) => typeof o.targetLang == "string" && o.targetLang.trim().length > 0 ? o.targetLang.trim() : p === "tencent-tmt" ? r.providers.tencentTmt.target : "zh-CN", y = [];
-  for (const p of l) {
-    const u = d(p), m = T(p);
+  }, r = Ue().config, i = (o.provider ? Ke(o.provider, r.defaultProvider) : null) ?? r.defaultProvider, c = (r.fallbackProviders ?? []).filter((p) => p !== i), d = [i, ...c].filter(
+    (p, g, y) => y.indexOf(p) === g
+  ), a = Me(o.timeoutMs, r.timeoutMs), l = (p) => typeof o.sourceLang == "string" && o.sourceLang.trim().length > 0 ? o.sourceLang.trim() : p === "tencent-tmt" ? r.providers.tencentTmt.source : "en", b = (p) => typeof o.targetLang == "string" && o.targetLang.trim().length > 0 ? o.targetLang.trim() : p === "tencent-tmt" ? r.providers.tencentTmt.target : "zh-CN", m = [];
+  for (const p of d) {
+    const g = l(p), y = b(p);
     try {
       return {
-        translatedText: p === "openai-compatible" ? await dt(o, u, m, r, a) : p === "tencent-tmt" ? await pt(o, u, m, r, a) : await lt(o.text, u, m, r, a),
+        translatedText: p === "openai-compatible" ? await pt(o, g, y, r, a) : p === "tencent-tmt" ? await ft(o, g, y, r, a) : await dt(o.text, g, y, r, a),
         provider: p
       };
-    } catch (I) {
-      const b = I.message, k = typeof b == "string" && b.trim().length > 0 ? b.trim() : "unknown error";
-      y.push(`${p} translation failed: ${k}`);
+    } catch (w) {
+      const C = w.message, k = typeof C == "string" && C.trim().length > 0 ? C.trim() : "unknown error";
+      m.push(`${p} translation failed: ${k}`);
     }
   }
-  throw new Error(y.join(" | "));
-}, ut = () => {
+  throw new Error(m.join(" | "));
+}, gt = () => {
   if (process.platform === "win32") {
     const t = [
       process.env.COMSPEC,
@@ -834,7 +835,7 @@ ${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae 
     for (const n of t)
       if (n)
         if (n.endsWith(".exe") && n.includes("\\")) {
-          if (x.existsSync(n))
+          if (T.existsSync(n))
             return n;
         } else
           return n;
@@ -852,14 +853,14 @@ ${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae 
   for (const t of e)
     if (t) {
       if (t.startsWith("/")) {
-        if (x.existsSync(t))
+        if (T.existsSync(t))
           return t;
         continue;
       }
       return t;
     }
   return "/bin/zsh";
-}, gt = () => process.platform === "win32" ? ["-NoLogo"] : ["-l"], yt = (e, t) => {
+}, ht = () => process.platform === "win32" ? ["-NoLogo"] : ["-l"], yt = (e, t) => {
   const n = [];
   let o = 0;
   for (; o < e.length; ) {
@@ -891,146 +892,164 @@ ${re}`, se = de(`TC3${u}`, k), U = de(se, "tmt"), ie = de(U, "tc3_request"), ae 
     s === 251 || s === 252 ? t.write(Buffer.from([255, 254, i])) : (s === 253 || s === 254) && t.write(Buffer.from([255, 252, i])), o += 3;
   }
   return Buffer.from(n);
-}, ht = (e, t = 120, n = 40) => {
-  V(e), S.get(e)?.kill();
-  const o = ut(), r = Ge.spawn(o, gt(), {
+}, mt = (e, t = 120, n = 40) => {
+  X(e), A.get(e)?.kill();
+  const o = gt(), r = We.spawn(o, ht(), {
     cols: t,
     rows: n,
-    cwd: pe.homedir(),
+    cwd: Y.homedir(),
     env: process.env,
     name: (process.platform === "win32", "xterm-256color")
   });
-  S.set(e, r), r.onData((s) => {
-    w?.webContents.send("pty:data", { tabId: e, data: s });
+  A.set(e, r), r.onData((s) => {
+    x?.webContents.send("pty:data", { tabId: e, data: s });
   }), r.onExit(({ exitCode: s }) => {
-    w?.webContents.send("pty:exit", { tabId: e, exitCode: s }), S.get(e) === r && S.delete(e);
+    x?.webContents.send("pty:exit", { tabId: e, exitCode: s, source: "pty" }), A.get(e) === r && A.delete(e);
   });
-}, mt = async (e, t, n, o) => {
+}, wt = async (e, t, n, o) => {
   if (t.trim().length === 0 || !Number.isFinite(n))
     return !1;
-  S.get(e)?.kill(), S.delete(e), V(e);
-  const r = new De.Socket();
-  return r.setNoDelay(!0), j.set(e, { protocol: o, socket: r }), await new Promise((i) => {
+  A.get(e)?.kill(), A.delete(e), X(e);
+  const r = new He.Socket();
+  return r.setNoDelay(!0), r.setKeepAlive(!0, 3e4), z.set(e, { protocol: o, socket: r }), await new Promise((i) => {
     let c = !1;
-    const l = (a) => {
+    const d = (a) => {
       c || (c = !0, i(a));
     };
     r.once("connect", () => {
-      w?.webContents.send("pty:data", {
+      x?.webContents.send("pty:data", {
         tabId: e,
         data: `\r
 [local ${o} connected ${t}:${n}]\r
 `
-      }), l(!0);
+      }), d(!0);
     }), r.once("error", (a) => {
-      w?.webContents.send("pty:data", {
+      x?.webContents.send("pty:data", {
         tabId: e,
         data: `\r
 [local ${o} connect failed: ${a.message}]\r
 `
-      }), l(!1);
+      }), d(!1);
     }), r.connect(n, t);
   }) ? (r.on("data", (i) => {
     const c = o === "telnet" ? yt(i, r) : i;
-    c.length !== 0 && w?.webContents.send("pty:data", { tabId: e, data: c.toString("utf8") });
+    c.length !== 0 && x?.webContents.send("pty:data", { tabId: e, data: c.toString("utf8") });
   }), r.on("error", (i) => {
-    w?.webContents.send("pty:data", {
+    x?.webContents.send("pty:data", {
       tabId: e,
       data: `\r
 [local ${o} error: ${i.message}]\r
 `
     });
   }), r.on("close", () => {
-    const i = j.get(e);
-    i && i.socket === r && j.delete(e), w?.webContents.send("pty:exit", { tabId: e, exitCode: 0 });
-  }), !0) : (V(e), !1);
-}, wt = (e) => {
-  const t = V(e), n = S.get(e);
-  return n ? (n.kill(), S.delete(e), !0) : t;
-}, vt = () => {
-  for (const e of S.values())
+    const i = z.get(e);
+    i && i.socket === r && z.delete(e), x?.webContents.send("pty:exit", { tabId: e, exitCode: 0, source: "local" });
+  }), !0) : (X(e), !1);
+}, vt = (e) => {
+  const t = X(e), n = A.get(e);
+  return n ? (n.kill(), A.delete(e), !0) : t;
+}, xt = () => {
+  for (const e of A.values())
     e.kill();
-  S.clear();
-  for (const [e] of j)
-    V(e);
-}, Ae = async () => {
-  w = new ke({
+  A.clear();
+  for (const [e] of z)
+    X(e);
+}, ke = async () => {
+  x = new Oe({
     width: 1500,
     height: 900,
-    title: "termbridge-v2",
+    title: fe,
     webPreferences: {
-      preload: We,
+      preload: Ze,
       contextIsolation: !0,
       nodeIntegration: !1
     }
   });
   const e = process.env.VITE_DEV_SERVER_URL;
-  e ? (await w.loadURL(e), w.webContents.openDevTools({ mode: "detach" })) : await w.loadFile(v.join(X, "../dist/index.html"));
+  e ? (await x.loadURL(e), x.webContents.openDevTools({ mode: "detach" })) : await x.loadFile(h.join(q, "../dist/index.html"));
 };
 E.whenReady().then(() => {
-  h.on("pty:write", (e, t) => {
+  E.setName(fe), process.platform === "win32" && E.setAppUserModelId(fe), v.on("pty:write", (e, t) => {
     if (!t || typeof t != "object")
       return;
     const n = t;
     typeof n.tabId != "string" || typeof n.data != "string" || ye(n.tabId, n.data);
-  }), h.handle("pty:spawn", (e, t, n, o) => {
+  }), v.handle("pty:spawn", (e, t, n, o) => {
     if (typeof t != "string" || t.length === 0)
       return !1;
     try {
-      return ht(t, n, o), !0;
+      return mt(t, n, o), !0;
     } catch (r) {
-      return w?.webContents.send("pty:data", {
+      return x?.webContents.send("pty:data", {
         tabId: t,
         data: `\r
 [pty spawn failed: ${r.message}]\r
 `
       }), !1;
     }
-  }), h.handle("pty:write", (e, t, n) => typeof t != "string" || t.length === 0 || typeof n != "string" ? !1 : (ye(t, n), !0)), h.handle("session:connectLocal", async (e, t, n, o, r) => typeof t != "string" || t.length === 0 || typeof n != "string" || n.trim().length === 0 || typeof o != "number" || !Number.isFinite(o) || r !== "telnet" && r !== "raw" ? !1 : mt(t, n.trim(), Math.floor(o), r)), h.handle("pty:resize", (e, t, n, o) => {
+  }), v.handle("pty:write", (e, t, n) => typeof t != "string" || t.length === 0 || typeof n != "string" ? !1 : (ye(t, n), !0)), v.handle("session:connectLocal", async (e, t, n, o, r) => typeof t != "string" || t.length === 0 || typeof n != "string" || n.trim().length === 0 || typeof o != "number" || !Number.isFinite(o) || r !== "telnet" && r !== "raw" ? !1 : wt(t, n.trim(), Math.floor(o), r)), v.handle("pty:resize", (e, t, n, o) => {
     if (typeof t != "string" || t.length === 0)
       return !1;
-    const r = S.get(t);
-    return r ? (r.resize(n, o), !0) : !!j.has(t);
-  }), h.handle("pty:kill", (e, t) => typeof t != "string" || t.length === 0 ? !1 : wt(t)), h.handle("glossary:load", () => B()), h.handle("glossary:reload", () => B()), h.handle("glossary:import", async () => {
+    const r = A.get(t);
+    return r ? (r.resize(n, o), !0) : !!z.has(t);
+  }), v.handle("pty:kill", (e, t) => typeof t != "string" || t.length === 0 ? !1 : vt(t)), v.handle("glossary:load", () => V()), v.handle("glossary:reload", () => V()), v.handle("glossary:import", async () => {
     const e = {
       title: "Import glossary.json",
       filters: [{ name: "JSON", extensions: ["json"] }],
       properties: ["openFile"]
-    }, t = w ? await K.showOpenDialog(w, e) : await K.showOpenDialog(e);
-    return t.canceled || t.filePaths.length === 0 ? null : Je(t.filePaths[0]);
-  }), h.handle("glossary:export", async () => {
-    const e = B(), t = {
+    }, t = x ? await M.showOpenDialog(x, e) : await M.showOpenDialog(e);
+    return t.canceled || t.filePaths.length === 0 ? null : Be(t.filePaths[0]);
+  }), v.handle("glossary:export", async () => {
+    const e = V(), t = {
       title: "Export glossary.json",
-      defaultPath: v.join(v.dirname(e.path), "glossary.export.json"),
+      defaultPath: h.join(h.dirname(e.path), "glossary.export.json"),
       filters: [{ name: "JSON", extensions: ["json"] }]
-    }, n = w ? await K.showSaveDialog(w, t) : await K.showSaveDialog(t);
-    return n.canceled || !n.filePath ? !1 : (z(n.filePath, e.entries), !0);
-  }), h.handle("glossary:upsert", (e, t) => Be(t)), h.handle("glossary:delete", (e, t) => Ve(t)), h.handle("translate:loadConfig", () => _e()), h.handle("translate:saveConfig", (e, t) => st(t)), h.handle("translate:online", async (e, t) => ft(t)), h.handle("contexts:load", () => Ce()), h.handle("contexts:reload", () => Ce()), h.handle("contexts:save", (e, t) => et(t)), h.handle("logs:exportSession", async (e, t) => {
+    }, n = x ? await M.showSaveDialog(x, t) : await M.showSaveDialog(t);
+    return n.canceled || !n.filePath ? !1 : (N(n.filePath, e.entries), !0);
+  }), v.handle("glossary:upsert", (e, t) => Ve(t)), v.handle("glossary:delete", (e, t) => Xe(t)), v.handle("translate:loadConfig", () => Ue()), v.handle("translate:saveConfig", (e, t) => it(t)), v.handle("translate:online", async (e, t) => ut(t)), v.handle("contexts:load", () => Se()), v.handle("contexts:reload", () => Se()), v.handle("contexts:save", (e, t) => tt(t)), v.handle("logs:exportSession", async (e, t) => {
     if (!t || typeof t != "object")
       return null;
-    const n = t, o = typeof n.tabId == "string" ? n.tabId.trim() : "", r = typeof n.tabTitle == "string" ? n.tabTitle.trim() : "", s = typeof n.sessionName == "string" ? n.sessionName.trim() : "", i = typeof n.cleanText == "string" ? n.cleanText : "", c = typeof n.jsonl == "string" ? n.jsonl : "";
+    const n = t, o = typeof n.tabId == "string" ? n.tabId.trim() : "", r = typeof n.tabTitle == "string" ? n.tabTitle.trim() : "", s = typeof n.sessionName == "string" ? n.sessionName.trim() : "", i = typeof n.cleanText == "string" ? n.cleanText : "", c = typeof n.jsonl == "string" ? n.jsonl : "", d = typeof n.autoPathTemplate == "string" ? n.autoPathTemplate.trim() : "";
     if (o.length === 0 || i.length === 0 || c.length === 0)
       return null;
-    const l = (s || r || o).toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""), a = l.length > 0 ? l : o, d = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-"), T = `session-log-${a}-${d}`, y = w ? await K.showSaveDialog(w, {
-      title: "Export Session Log",
-      defaultPath: v.join(pe.homedir(), `${T}.txt`),
-      filters: [{ name: "Text", extensions: ["txt"] }]
-    }) : await K.showSaveDialog({
-      title: "Export Session Log",
-      defaultPath: v.join(pe.homedir(), `${T}.txt`),
-      filters: [{ name: "Text", extensions: ["txt"] }]
-    });
-    if (y.canceled || !y.filePath)
-      return null;
-    const p = y.filePath, u = p.toLocaleLowerCase().endsWith(".txt") ? `${p.slice(0, -4)}.jsonl` : `${p}.jsonl`;
-    return x.writeFileSync(p, i, "utf8"), x.writeFileSync(u, c, "utf8"), {
-      txtPath: p,
-      jsonlPath: u
+    const a = (s || r || o).toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""), l = a.length > 0 ? a : o, b = r.toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""), m = b.length > 0 ? b : o, p = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-"), g = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), y = `session-log-${l}-${p}`;
+    let w = "";
+    if (d.length > 0) {
+      const S = {
+        tabId: o,
+        tabTitle: r.length > 0 ? r : o,
+        tabSlug: m,
+        sessionName: s.length > 0 ? s : r.length > 0 ? r : o,
+        sessionSlug: l,
+        ts: p,
+        date: g
+      }, P = d.replace(/\{([a-zA-Z0-9_]+)\}/g, (I, K) => S[K] !== void 0 ? S[K] : I), O = P.startsWith("~/") ? h.join(Y.homedir(), P.slice(2)) : P, L = h.isAbsolute(O) ? O : h.join(process.cwd(), O);
+      w = h.extname(L).toLocaleLowerCase() === ".txt" ? L : `${L}.txt`;
+    } else {
+      const S = x ? await M.showSaveDialog(x, {
+        title: "Export Session Log",
+        defaultPath: h.join(Y.homedir(), `${y}.txt`),
+        filters: [{ name: "Text", extensions: ["txt"] }]
+      }) : await M.showSaveDialog({
+        title: "Export Session Log",
+        defaultPath: h.join(Y.homedir(), `${y}.txt`),
+        filters: [{ name: "Text", extensions: ["txt"] }]
+      });
+      if (S.canceled || !S.filePath)
+        return null;
+      w = S.filePath;
+    }
+    const C = h.dirname(w);
+    T.mkdirSync(C, { recursive: !0 });
+    const k = w.toLocaleLowerCase().endsWith(".txt") ? `${w.slice(0, -4)}.jsonl` : `${w}.jsonl`;
+    return T.writeFileSync(w, i, "utf8"), T.writeFileSync(k, c, "utf8"), {
+      txtPath: w,
+      jsonlPath: k
     };
-  }), Ae(), E.on("activate", () => {
-    ke.getAllWindows().length === 0 && Ae();
+  }), ke(), E.on("activate", () => {
+    Oe.getAllWindows().length === 0 && ke();
   });
 });
 E.on("window-all-closed", () => {
-  vt(), process.platform !== "darwin" && E.quit();
+  xt(), process.platform !== "darwin" && E.quit();
 });

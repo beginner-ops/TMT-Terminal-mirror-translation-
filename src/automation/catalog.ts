@@ -56,6 +56,22 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
       risk: 'safe',
       updatedAt: new Date(0).toISOString(),
     },
+    {
+      id: 'auto-network-export-config',
+      groupId: 'maintenance',
+      name: '设备配置导出（模板）',
+      description: '连接设备后，清空视图、执行查看配置、等待提示符并导出当前显示文本',
+      content: [
+        '# 厂商命令可改成 show running-config / display current-configuration',
+        'app.clear_view',
+        'term.send display current-configuration',
+        'term.wait_prompt 90000',
+        'app.export_visible',
+      ].join('\n'),
+      tags: ['network', 'backup', 'export', 'config'],
+      risk: 'caution',
+      updatedAt: new Date(0).toISOString(),
+    },
   ],
 }
 

@@ -155,6 +155,7 @@ type SessionLogExportRequest = {
   sessionName?: string
   cleanText: string
   jsonl: string
+  autoPathTemplate?: string
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -164,6 +165,7 @@ const preloadPath =
     : path.join(__dirname, 'preload.js')
 
 let mainWindow: BrowserWindow | null = null
+const APP_DISPLAY_NAME = 'TMT-Terminal-mirror-translation'
 const ptySessions = new Map<string, IPty>()
 type LocalSessionProtocol = 'telnet' | 'raw'
 type LocalSocketSession = {
@@ -198,7 +200,8 @@ const writeToSession = (tabId: string, data: string): void => {
     return
   }
   try {
-    localSession.socket.write(data)
+    const payload = localSession.protocol === 'telnet' ? data.replace(/\x7f/g, '\x08') : data
+    localSession.socket.write(payload)
   } catch {
     // ignore socket write failures
   }
@@ -1911,7 +1914,7 @@ const spawnPty = (tabId: string, cols = 120, rows = 40): void => {
   })
 
   session.onExit(({ exitCode }) => {
-    mainWindow?.webContents.send('pty:exit', { tabId, exitCode })
+    mainWindow?.webContents.send('pty:exit', { tabId, exitCode, source: 'pty' as const })
     const active = ptySessions.get(tabId)
     if (active === session) {
       ptySessions.delete(tabId)
@@ -1934,6 +1937,7 @@ const connectLocalSocket = async (
 
   const socket = new net.Socket()
   socket.setNoDelay(true)
+  socket.setKeepAlive(true, 30_000)
   localSocketSessions.set(tabId, { protocol, socket })
 
   const ok = await new Promise<boolean>((resolve) => {
@@ -1986,7 +1990,7 @@ const connectLocalSocket = async (
     if (active && active.socket === socket) {
       localSocketSessions.delete(tabId)
     }
-    mainWindow?.webContents.send('pty:exit', { tabId, exitCode: 0 })
+    mainWindow?.webContents.send('pty:exit', { tabId, exitCode: 0, source: 'local' as const })
   })
   return true
 }
@@ -2017,7 +2021,7 @@ const createWindow = async (): Promise<void> => {
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 900,
-    title: 'termbridge-v2',
+    title: APP_DISPLAY_NAME,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -2035,6 +2039,10 @@ const createWindow = async (): Promise<void> => {
 }
 
 app.whenReady().then(() => {
+  app.setName(APP_DISPLAY_NAME)
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_DISPLAY_NAME)
+  }
   ipcMain.on('pty:write', (_event: unknown, payload: unknown) => {
     if (!payload || typeof payload !== 'object') {
       return
@@ -2205,6 +2213,7 @@ app.whenReady().then(() => {
     const sessionName = typeof request.sessionName === 'string' ? request.sessionName.trim() : ''
     const cleanText = typeof request.cleanText === 'string' ? request.cleanText : ''
     const jsonl = typeof request.jsonl === 'string' ? request.jsonl : ''
+    const autoPathTemplate = typeof request.autoPathTemplate === 'string' ? request.autoPathTemplate.trim() : ''
     if (tabId.length === 0 || cleanText.length === 0 || jsonl.length === 0) {
       return null
     }
@@ -2214,25 +2223,60 @@ app.whenReady().then(() => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+|-+$/g, '')
     const safeSlug = slug.length > 0 ? slug : tabId
+    const tabSlugRaw = tabTitle
+      .toLocaleLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    const tabSlug = tabSlugRaw.length > 0 ? tabSlugRaw : tabId
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const date = new Date().toISOString().slice(0, 10)
     const defaultBase = `session-log-${safeSlug}-${timestamp}`
-    const result = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, {
-          title: 'Export Session Log',
-          defaultPath: path.join(os.homedir(), `${defaultBase}.txt`),
-          filters: [{ name: 'Text', extensions: ['txt'] }],
-        })
-      : await dialog.showSaveDialog({
-          title: 'Export Session Log',
-          defaultPath: path.join(os.homedir(), `${defaultBase}.txt`),
-          filters: [{ name: 'Text', extensions: ['txt'] }],
-        })
+    let txtPath = ''
+    if (autoPathTemplate.length > 0) {
+      const tokenValues: Record<string, string> = {
+        tabId,
+        tabTitle: tabTitle.length > 0 ? tabTitle : tabId,
+        tabSlug,
+        sessionName: sessionName.length > 0 ? sessionName : (tabTitle.length > 0 ? tabTitle : tabId),
+        sessionSlug: safeSlug,
+        ts: timestamp,
+        date,
+      }
+      const resolvedRelative = autoPathTemplate.replace(/\{([a-zA-Z0-9_]+)\}/g, (full, token: string) => {
+        if (tokenValues[token] !== undefined) {
+          return tokenValues[token]
+        }
+        return full
+      })
+      const withHome = resolvedRelative.startsWith('~/')
+        ? path.join(os.homedir(), resolvedRelative.slice(2))
+        : resolvedRelative
+      const candidatePath = path.isAbsolute(withHome)
+        ? withHome
+        : path.join(process.cwd(), withHome)
+      const ext = path.extname(candidatePath).toLocaleLowerCase()
+      txtPath = ext === '.txt' ? candidatePath : `${candidatePath}.txt`
+    } else {
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, {
+            title: 'Export Session Log',
+            defaultPath: path.join(os.homedir(), `${defaultBase}.txt`),
+            filters: [{ name: 'Text', extensions: ['txt'] }],
+          })
+        : await dialog.showSaveDialog({
+            title: 'Export Session Log',
+            defaultPath: path.join(os.homedir(), `${defaultBase}.txt`),
+            filters: [{ name: 'Text', extensions: ['txt'] }],
+          })
 
-    if (result.canceled || !result.filePath) {
-      return null
+      if (result.canceled || !result.filePath) {
+        return null
+      }
+      txtPath = result.filePath
     }
 
-    const txtPath = result.filePath
+    const txtDir = path.dirname(txtPath)
+    fs.mkdirSync(txtDir, { recursive: true })
     const jsonlPath =
       txtPath.toLocaleLowerCase().endsWith('.txt') ? `${txtPath.slice(0, -4)}.jsonl` : `${txtPath}.jsonl`
     fs.writeFileSync(txtPath, cleanText, 'utf8')

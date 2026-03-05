@@ -8,9 +8,31 @@ export type XtermBundle = {
   fitAddon: FitAddon
 }
 
-export const resolveXtermTheme = (mode: 'dark' | 'light'): ITheme => {
-  if (mode === 'light') {
-    return {
+type ThemeOverrides = {
+  background?: string
+  foreground?: string
+}
+
+const isHexColor = (value: string): boolean => /^#[0-9a-fA-F]{6}$/.test(value) || /^#[0-9a-fA-F]{3}$/.test(value)
+
+const normalizeThemeColor = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  const trimmed = value.trim()
+  if (!isHexColor(trimmed)) {
+    return undefined
+  }
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const chars = trimmed.slice(1).split('')
+    return `#${chars.map((char) => `${char}${char}`).join('').toLowerCase()}`
+  }
+  return trimmed.toLowerCase()
+}
+
+export const resolveXtermTheme = (mode: 'dark' | 'light', overrides?: ThemeOverrides): ITheme => {
+  const baseTheme: ITheme = mode === 'light'
+    ? {
       background: '#ffffff',
       foreground: '#0f172a',
       cursor: '#2563eb',
@@ -24,9 +46,7 @@ export const resolveXtermTheme = (mode: 'dark' | 'light'): ITheme => {
       cyan: '#0f766e',
       white: '#334155',
     }
-  }
-
-  return {
+    : {
     background: '#111827',
     foreground: '#e5e7eb',
     cursor: '#22c55e',
@@ -40,9 +60,23 @@ export const resolveXtermTheme = (mode: 'dark' | 'light'): ITheme => {
     cyan: '#22d3ee',
     white: '#e5e7eb',
   }
+
+  const background = normalizeThemeColor(overrides?.background)
+  const foreground = normalizeThemeColor(overrides?.foreground)
+  if (background) {
+    baseTheme.background = background
+  }
+  if (foreground) {
+    baseTheme.foreground = foreground
+  }
+  return baseTheme
 }
 
-export const createXterm = (container: HTMLDivElement, mode: 'dark' | 'light' = 'dark'): XtermBundle => {
+export const createXterm = (
+  container: HTMLDivElement,
+  mode: 'dark' | 'light' = 'dark',
+  overrides?: ThemeOverrides,
+): XtermBundle => {
   const term = new Terminal({
     cursorBlink: true,
     fontFamily: TERMINAL_DISPLAY.fontFamily,
@@ -52,7 +86,7 @@ export const createXterm = (container: HTMLDivElement, mode: 'dark' | 'light' = 
     convertEol: false,
     scrollback: 2000,
     allowTransparency: false,
-    theme: resolveXtermTheme(mode),
+    theme: resolveXtermTheme(mode, overrides),
   })
 
   const fitAddon = new FitAddon()

@@ -29,6 +29,7 @@ import { applyInlinePatches } from '../mirror/PatchApply'
 import type { GlossaryDomain, GlossaryEntry, GlossaryEntryUpsertInput } from '../mirror/GlossaryTypes'
 import { MarkerLayer } from '../mirror/MarkerLayer'
 import { MirrorRenderer } from '../mirror/MirrorRenderer'
+import { LeftHighlightOverlay } from '../mirror/LeftHighlightOverlay'
 import { createEmptyScreen, type DebugStats, type Marker, type Screen } from '../mirror/GridModel'
 import { GlossaryManagerModal } from './GlossaryManagerModal'
 import { TranslationStrategyPanel } from './TranslationStrategyPanel'
@@ -39,7 +40,7 @@ import { CommandSearchPanel } from '../commands/CommandSearchPanel'
 import type { CommandConfig, CommandContext } from '../commands/types'
 import { normalizeCommandConfig } from '../commands/utils'
 import { AutomationPanel } from '../automation/AutomationPanel'
-import { SettingsPanel, type AppSettings } from './SettingsPanel'
+import { SettingsPanel, type AppSettings, type SyntaxHighlightRule } from './SettingsPanel'
 import { SessionManagerPanel } from '../sessions/SessionManagerPanel'
 import {
   DEFAULT_AUTOMATION_CONFIG,
@@ -61,12 +62,14 @@ import {
   DEFAULT_SESSION_CATALOG_CONFIG,
   createGroupId,
   generateLocalPortPackSessions,
+  createSessionTagGroupId,
   createSessionEntryId,
   normalizeSessionCatalogConfig,
   VENDOR_GROUP_DEFS,
   type LocalPortPackConfig,
   type LocalPortVendorPlan,
   type SessionCatalogConfig,
+  type SessionTagGroup,
   type SessionProtocol,
   type SessionGroup,
   type SessionEntry,
@@ -97,10 +100,13 @@ const APP_SETTINGS_STORAGE_KEY = 'termbridge:app-settings'
 const SESSION_CATALOG_STORAGE_KEY = 'termbridge:session-catalog'
 const COMMAND_EXPLAIN_RULES_STORAGE_KEY = 'termbridge:command-explainer-rules'
 const FLOATING_MENU_WIDTH_PX = 220
-const FLOATING_MENU_HEIGHT_PX = 216
+const FLOATING_MENU_HEIGHT_PX = 256
 const FLOATING_POPOVER_WIDTH_PX = 860
 const FLOATING_POPOVER_HEIGHT_PX = 520
 const FLOATING_OVERLAY_MARGIN_PX = 8
+const AUTOMATION_PROMPT_TIMEOUT_MS = 60_000
+const DATA_EXCHANGE_SCHEMA = 'termbridge.exchange.v1'
+const DATA_EXCHANGE_PACK_SCHEMA = 'termbridge.exchange.pack.v1'
 
 type RightMirrorMode = 'translated' | 'source'
 type SidePanelMode =
@@ -116,6 +122,7 @@ type TerminalTab = {
   id: string
   title: string
 }
+type TerminalTransport = 'pty' | 'local'
 type NetworkVendor = 'unknown' | 'cisco' | 'huawei' | 'h3c' | 'ruijie'
 type NetworkMode = 'unknown' | 'exec' | 'privileged' | 'config'
 type NetworkHints = {
@@ -131,6 +138,18 @@ type SessionLogEvent = {
   direction: 'input' | 'output'
   data: string
 }
+type AutomationStep =
+  | { kind: 'send'; command: string }
+  | { kind: 'sendAll'; command: string }
+  | { kind: 'sendTabs'; selector: string; command: string }
+  | { kind: 'setMode'; mode: 'current' | 'all' | 'tabs'; selector?: string }
+  | { kind: 'runTagGroup'; label: string; target: 'new' | 'current' }
+  | { kind: 'sleep'; timeoutMs: number }
+  | { kind: 'clearView' }
+  | { kind: 'exportVisible' }
+  | { kind: 'exportVisibleTo'; pathTemplate: string }
+  | { kind: 'waitPrompt'; timeoutMs: number }
+
 type CommandDockSlot = {
   id: string
   label: string
@@ -143,6 +162,18 @@ type SelectionMenuState = {
   y: number
   text: string
   localEntry: GlossaryEntry | null
+}
+
+type LeftContextMenuState = {
+  x: number
+  y: number
+  selectedText: string
+}
+
+type ParamContextMenuState = {
+  x: number
+  y: number
+  hasSelection: boolean
 }
 
 type CommandExplainPopoverState = {
@@ -182,6 +213,60 @@ type SelectionPopoverState = {
   onlineProvider?: TermbridgeTranslationProvider
   localEntry: GlossaryEntry | null
   protectedSegments: string[]
+}
+
+type DataExchangeModule = 'sessions' | 'automation' | 'command-catalog' | 'command-explain' | 'glossary'
+
+type DataExchangeBundle = {
+  schema: string
+  module: DataExchangeModule
+  version: number
+  exportedAt: string
+  payload: unknown
+}
+
+type DataExchangePack = {
+  schema: string
+  packType: 'all-modules'
+  version: number
+  exportedAt: string
+  modules: DataExchangeBundle[]
+}
+
+const ALL_TRANSLATION_PROVIDERS: TermbridgeTranslationProvider[] = [
+  'google-free',
+  'openai-compatible',
+  'tencent-tmt',
+]
+
+const translationProviderLabel = (provider: TermbridgeTranslationProvider): string => {
+  if (provider === 'openai-compatible') {
+    return 'OpenAI Compatible'
+  }
+  if (provider === 'tencent-tmt') {
+    return 'Tencent TMT'
+  }
+  return 'Google Free'
+}
+
+const resolveSelectionProviderOptions = (
+  config: TermbridgeTranslationConfig | null,
+): TermbridgeTranslationProvider[] => {
+  if (!config) {
+    return ALL_TRANSLATION_PROVIDERS
+  }
+  const providers: TermbridgeTranslationProvider[] = [config.defaultProvider]
+  for (const fallback of config.fallbackProviders ?? []) {
+    if (!providers.includes(fallback)) {
+      providers.push(fallback)
+    }
+  }
+  for (const builtIn of ALL_TRANSLATION_PROVIDERS) {
+    if (!providers.includes(builtIn)) {
+      providers.push(builtIn)
+    }
+  }
+  return providers
 }
 
 type CellMetrics = {
@@ -343,26 +428,52 @@ const buildSelectionChunks = (text: string, protectedRanges: ProtectedRange[]): 
 const normalizeMirrorSelectionText = (raw: string): string => {
   const text = raw.replace(/\r\n/g, '\n')
   const lines = text.split('\n')
-  if (lines.length < 8) {
+  if (lines.length < 4) {
     return text
   }
 
-  const nonEmpty = lines.filter((line) => line.length > 0)
-  if (nonEmpty.length < 6) {
+  const nonEmpty = lines.filter((line) => line.trim().length > 0)
+  if (nonEmpty.length < 4) {
     return text
   }
 
-  const shortLineCount = nonEmpty.filter((line) => line.length <= 2).length
-  const averageLength = nonEmpty.reduce((sum, line) => sum + line.length, 0) / nonEmpty.length
+  const nearSingleCharCount = nonEmpty.filter((line) => line.trim().length <= 1).length
+  const averageTrimmedLength = nonEmpty.reduce((sum, line) => sum + line.trim().length, 0) / nonEmpty.length
   const alphaNumericCount = (nonEmpty.join('').match(/[A-Za-z0-9\u4e00-\u9fff]/g) ?? []).length
-  const likelyVerticalSelection =
-    shortLineCount / nonEmpty.length >= 0.82 && averageLength <= 2.2 && alphaNumericCount >= Math.floor(nonEmpty.length * 0.6)
+  const looksFragmentedByCell =
+    nearSingleCharCount / nonEmpty.length >= 0.85 &&
+    averageTrimmedLength <= 1.3 &&
+    alphaNumericCount >= Math.floor(nonEmpty.length * 0.6)
 
-  if (!likelyVerticalSelection) {
+  if (!looksFragmentedByCell) {
     return text
   }
 
   return lines.join('')
+}
+
+const readMirrorTextFromSelectionRange = (range: Range): string => {
+  const fragment = range.cloneContents()
+  const wrapper = document.createElement('div')
+  wrapper.appendChild(fragment)
+
+  const rows = Array.from(wrapper.querySelectorAll<HTMLElement>('.mirror-row'))
+  if (rows.length > 0) {
+    return rows
+      .map((row) =>
+        Array.from(row.querySelectorAll<HTMLElement>('.mirror-cell'))
+          .map((cell) => cell.textContent ?? '')
+          .join(''),
+      )
+      .join('\n')
+  }
+
+  const cells = Array.from(wrapper.querySelectorAll<HTMLElement>('.mirror-cell'))
+  if (cells.length > 0) {
+    return cells.map((cell) => cell.textContent ?? '').join('')
+  }
+
+  return wrapper.textContent ?? ''
 }
 
 const readErrorMessage = (error: unknown): string => {
@@ -384,6 +495,15 @@ const shortenErrorMessage = (message: string, maxLength = 180): string => {
   }
 
   return `${compact.slice(0, maxLength)}...`
+}
+
+const extractDirectoryPath = (filePath: string): string => {
+  const normalized = filePath.replace(/\\/g, '/')
+  const index = normalized.lastIndexOf('/')
+  if (index <= 0) {
+    return normalized
+  }
+  return normalized.slice(0, index)
 }
 
 const defaultCellMetrics: CellMetrics = {
@@ -424,6 +544,15 @@ const isLikelyPasteInput = (data: string): boolean => {
   }
 
   return data.length > 1 && (data.includes('\r') || data.includes('\n'))
+}
+
+const normalizeTerminalInputData = (data: string): string => {
+  if (data.length === 0) {
+    return data
+  }
+  return data
+    .replace(/\u3000/g, ' ')
+    .replace(/[\uff01-\uff5e]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
 }
 
 const stripAnsiSequences = (text: string): string => {
@@ -585,6 +714,30 @@ const resolveExplainContext = (activeContextId: string, hints: NetworkHints): Ex
   return 'linux_shell'
 }
 
+const resolveHighlightScope = (
+  activeContextId: string,
+  hints: NetworkHints,
+): SyntaxHighlightRule['scope'] => {
+  if (hints.vendor === 'cisco') {
+    return 'network_cisco'
+  }
+  if (hints.vendor === 'huawei') {
+    return 'network_huawei'
+  }
+  if (hints.vendor === 'h3c') {
+    return 'network_h3c'
+  }
+  if (hints.vendor === 'ruijie') {
+    return 'network_ruijie'
+  }
+
+  const lower = activeContextId.toLocaleLowerCase()
+  if (lower.includes('docker')) {
+    return 'docker'
+  }
+  return 'linux_shell'
+}
+
 const readInitialRightMirrorMode = (): RightMirrorMode => {
   try {
     const raw = window.localStorage.getItem(RIGHT_MIRROR_MODE_STORAGE_KEY)
@@ -659,6 +812,87 @@ const readInitialDockSlots = (): CommandDockSlot[] => {
   }
 }
 
+const DEFAULT_TERMINAL_COLORS: Record<'dark' | 'light', { background: string; foreground: string }> = {
+  dark: {
+    background: '#111827',
+    foreground: '#e5e7eb',
+  },
+  light: {
+    background: '#ffffff',
+    foreground: '#0f172a',
+  },
+}
+
+const isHexColor = (value: string): boolean => /^#[0-9a-fA-F]{6}$/.test(value) || /^#[0-9a-fA-F]{3}$/.test(value)
+
+const normalizeHexColor = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+
+  const trimmed = value.trim()
+  if (!isHexColor(trimmed)) {
+    return fallback
+  }
+
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const chars = trimmed.slice(1).split('')
+    return `#${chars.map((char) => `${char}${char}`).join('').toLowerCase()}`
+  }
+
+  return trimmed.toLowerCase()
+}
+
+const normalizeSyntaxHighlightRule = (input: unknown, index: number): SyntaxHighlightRule | null => {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const candidate = input as Partial<SyntaxHighlightRule>
+  const id = typeof candidate.id === 'string' && candidate.id.trim().length > 0 ? candidate.id.trim() : `hl-${index}`
+  const label = typeof candidate.label === 'string' && candidate.label.trim().length > 0 ? candidate.label.trim() : `规则 ${index + 1}`
+  const scope =
+    candidate.scope === 'linux_shell' ||
+    candidate.scope === 'docker' ||
+    candidate.scope === 'network_cisco' ||
+    candidate.scope === 'network_huawei' ||
+    candidate.scope === 'network_h3c' ||
+    candidate.scope === 'network_ruijie' ||
+    candidate.scope === 'all'
+      ? candidate.scope
+      : 'all'
+  const matchType =
+    candidate.matchType === 'prefix' || candidate.matchType === 'regex' || candidate.matchType === 'contains'
+      ? candidate.matchType
+      : 'contains'
+  const styleMode = candidate.styleMode === 'foreground' ? 'foreground' : 'background'
+  const pattern = typeof candidate.pattern === 'string' ? candidate.pattern : ''
+  const color = normalizeHexColor(candidate.color, '#f59e0b')
+  const enabled = candidate.enabled !== false
+
+  return {
+    id,
+    label,
+    scope,
+    matchType,
+    styleMode,
+    pattern,
+    color,
+    enabled,
+  }
+}
+
+const normalizeSyntaxHighlightRules = (input: unknown): SyntaxHighlightRule[] => {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  return input
+    .map((item, index) => normalizeSyntaxHighlightRule(item, index))
+    .filter((item): item is SyntaxHighlightRule => item !== null)
+    .slice(0, 120)
+}
+
 const normalizeDockSlots = (slots: CommandDockSlot[], expected: number): CommandDockSlot[] => {
   const safeExpected = Math.max(1, expected)
   return [...slots.slice(0, safeExpected), ...Array.from({ length: Math.max(0, safeExpected - slots.length) }, () => null)]
@@ -669,7 +903,34 @@ const defaultAppSettings: AppSettings = {
   showDebugButton: true,
   fontScale: 1,
   theme: 'dark',
+  terminalBackground: DEFAULT_TERMINAL_COLORS.dark.background,
+  terminalForeground: DEFAULT_TERMINAL_COLORS.dark.foreground,
+  leftHighlightOpacity: 0.22,
+  syntaxHighlightRules: [
+    {
+      id: 'default-error',
+      label: 'Error',
+      scope: 'all',
+      matchType: 'contains',
+      styleMode: 'foreground',
+      pattern: 'error',
+      color: '#ef4444',
+      enabled: true,
+    },
+    {
+      id: 'default-warning',
+      label: 'Warning',
+      scope: 'all',
+      matchType: 'contains',
+      styleMode: 'background',
+      pattern: 'warning',
+      color: '#f59e0b',
+      enabled: true,
+    },
+  ],
   dockSlots: 6,
+  shortcutNextTerminalTab: 'ctrl+tab',
+  dockShortcutStart: 'f1',
 }
 
 const normalizeAppSettings = (input: unknown): AppSettings => {
@@ -683,15 +944,36 @@ const normalizeAppSettings = (input: unknown): AppSettings => {
   const rawScale = typeof candidate.fontScale === 'number' ? candidate.fontScale : 1
   const fontScale = clamp(rawScale, 0.85, 1.25)
   const theme = candidate.theme === 'light' ? 'light' : 'dark'
+  const defaultColorByTheme = DEFAULT_TERMINAL_COLORS[theme]
+  const terminalBackground = normalizeHexColor(candidate.terminalBackground, defaultColorByTheme.background)
+  const terminalForeground = normalizeHexColor(candidate.terminalForeground, defaultColorByTheme.foreground)
+  const leftHighlightOpacity = clamp(typeof candidate.leftHighlightOpacity === 'number' ? candidate.leftHighlightOpacity : 0.22, 0.08, 0.5)
+  const syntaxHighlightRules = normalizeSyntaxHighlightRules(candidate.syntaxHighlightRules)
   const rawDockSlots = typeof candidate.dockSlots === 'number' ? candidate.dockSlots : defaultAppSettings.dockSlots
   const dockSlots = Math.max(4, Math.min(12, Math.round(rawDockSlots)))
+  const shortcutNextTerminalTab =
+    candidate.shortcutNextTerminalTab === 'ctrl+shift+tab'
+      ? 'ctrl+shift+tab'
+      : 'ctrl+tab'
+  const dockShortcutStart =
+    candidate.dockShortcutStart === 'f2' ||
+    candidate.dockShortcutStart === 'f3' ||
+    candidate.dockShortcutStart === 'f4'
+      ? candidate.dockShortcutStart
+      : 'f1'
 
   return {
     compactUi,
     showDebugButton,
     fontScale,
     theme,
+    terminalBackground,
+    terminalForeground,
+    leftHighlightOpacity,
+    syntaxHighlightRules,
     dockSlots,
+    shortcutNextTerminalTab,
+    dockShortcutStart,
   }
 }
 
@@ -706,6 +988,53 @@ const readInitialAppSettings = (): AppSettings => {
   } catch {
     return defaultAppSettings
   }
+}
+
+const parseFunctionKeyNumber = (value: AppSettings['dockShortcutStart']): number => {
+  if (value === 'f2') {
+    return 2
+  }
+  if (value === 'f3') {
+    return 3
+  }
+  if (value === 'f4') {
+    return 4
+  }
+  return 1
+}
+
+const downloadJsonFile = (filename: string, payload: unknown): void => {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const pickJsonFileText = async (): Promise<string | null> => {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) {
+        resolve(null)
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        resolve(String(reader.result ?? ''))
+      }
+      reader.onerror = () => {
+        resolve(null)
+      }
+      reader.readAsText(file)
+    }
+    input.click()
+  })
 }
 
 const readInitialAutomationConfig = (): AutomationConfig => {
@@ -734,6 +1063,175 @@ const readInitialSessionCatalogConfig = (): SessionCatalogConfig => {
   }
 }
 
+const mergeSessionCatalogForImport = (current: SessionCatalogConfig, incoming: SessionCatalogConfig): SessionCatalogConfig => {
+  const groupMap = new Map(current.groups.map((group) => [group.id, group]))
+  incoming.groups.forEach((group) => {
+    const duplicate = Array.from(groupMap.values()).some((item) => item.label.trim().toLowerCase() === group.label.trim().toLowerCase())
+    if (!duplicate) {
+      groupMap.set(group.id, group)
+    }
+  })
+  const groups = Array.from(groupMap.values())
+  const groupIds = new Set(groups.map((group) => group.id))
+  const fallbackGroupId = groups[0]?.id ?? 'linux'
+
+  const sessions = [...current.sessions]
+  incoming.sessions.forEach((session) => {
+    const key = `${session.name.trim().toLowerCase()}|${session.host.trim().toLowerCase()}|${session.port}|${session.protocol}`
+    const duplicate = sessions.some((item) => {
+      const itemKey = `${item.name.trim().toLowerCase()}|${item.host.trim().toLowerCase()}|${item.port}|${item.protocol}`
+      return itemKey === key
+    })
+    if (!duplicate) {
+      sessions.push({
+        ...session,
+        groupId: groupIds.has(session.groupId) ? session.groupId : fallbackGroupId,
+      })
+    }
+  })
+
+  const localPortPacks = [...current.localPortPacks]
+  incoming.localPortPacks.forEach((pack) => {
+    const key = `${pack.host.trim().toLowerCase()}|${pack.startPort}|${pack.count}|${pack.protocol}`
+    const duplicate = localPortPacks.some((item) => `${item.host.trim().toLowerCase()}|${item.startPort}|${item.count}|${item.protocol}` === key)
+    if (!duplicate) {
+      localPortPacks.push(pack)
+    }
+  })
+
+  const sessionIdSet = new Set(sessions.map((session) => session.id))
+  const tagGroups = [...current.tagGroups]
+  incoming.tagGroups.forEach((group) => {
+    const duplicate = tagGroups.some((item) => item.label.trim().toLowerCase() === group.label.trim().toLowerCase())
+    if (!duplicate) {
+      tagGroups.push({
+        ...group,
+        sessionIds: group.sessionIds.filter((id) => sessionIdSet.has(id)),
+      })
+    }
+  })
+
+  return normalizeSessionCatalogConfig({
+    ...current,
+    groups,
+    sessions,
+    localPortPacks,
+    tagGroups,
+  })
+}
+
+const mergeAutomationConfigForImport = (current: AutomationConfig, incoming: AutomationConfig): AutomationConfig => {
+  const groups = [...current.groups]
+  incoming.groups.forEach((group) => {
+    const duplicate = groups.some((item) => item.label.trim().toLowerCase() === group.label.trim().toLowerCase())
+    if (!duplicate) {
+      groups.push(group)
+    }
+  })
+  const groupIdSet = new Set(groups.map((group) => group.id))
+  const fallbackGroupId = groups[0]?.id ?? 'shell-native'
+  const scripts = [...current.scripts]
+  incoming.scripts.forEach((script) => {
+    const key = `${script.groupId}|${script.name.trim().toLowerCase()}`
+    const duplicate = scripts.some((item) => `${item.groupId}|${item.name.trim().toLowerCase()}` === key)
+    if (!duplicate) {
+      scripts.push({
+        ...script,
+        groupId: groupIdSet.has(script.groupId) ? script.groupId : fallbackGroupId,
+      })
+    }
+  })
+  return normalizeAutomationStorage({
+    version: 1,
+    groups,
+    scripts,
+  })
+}
+
+const mergeCommandCatalogForImport = (current: CommandCatalogConfig, incoming: CommandCatalogConfig): CommandCatalogConfig => {
+  const groups = [...current.groups]
+  incoming.groups.forEach((group) => {
+    const duplicate = groups.some((item) => item.label.trim().toLowerCase() === group.label.trim().toLowerCase())
+    if (!duplicate) {
+      groups.push(group)
+    }
+  })
+  const groupIdSet = new Set(groups.map((group) => group.id))
+  const fallbackGroupId = groups[0]?.id ?? 'shell'
+  const entries = [...current.entries]
+  incoming.entries.forEach((entry) => {
+    const key = `${entry.groupId}|${entry.title.trim().toLowerCase()}|${entry.command.trim().toLowerCase()}`
+    const duplicate = entries.some((item) => `${item.groupId}|${item.title.trim().toLowerCase()}|${item.command.trim().toLowerCase()}` === key)
+    if (!duplicate) {
+      entries.push({
+        ...entry,
+        groupId: groupIdSet.has(entry.groupId) ? entry.groupId : fallbackGroupId,
+      })
+    }
+  })
+  return normalizeCatalogConfig({
+    version: 1,
+    groups,
+    entries,
+  })
+}
+
+const mergeExplainRulesForImport = (current: ExplainRule[], incoming: ExplainRule[]): ExplainRule[] => {
+  const next = [...current]
+  incoming.forEach((rule) => {
+    const key = `${rule.context}|${rule.matcherType}|${rule.pattern.trim().toLowerCase()}`
+    const duplicate = next.some((item) => `${item.context}|${item.matcherType}|${item.pattern.trim().toLowerCase()}` === key)
+    if (!duplicate) {
+      next.push(rule)
+    }
+  })
+  return normalizeUserExplainRules(next)
+}
+
+const normalizeGlossaryEntriesForImport = (input: unknown): GlossaryEntry[] => {
+  const rows = Array.isArray(input)
+    ? input
+    : input && typeof input === 'object' && Array.isArray((input as { entries?: unknown[] }).entries)
+      ? (input as { entries: unknown[] }).entries
+      : []
+
+  const next: GlossaryEntry[] = []
+  rows.forEach((item) => {
+    if (!item || typeof item !== 'object') {
+      return
+    }
+    const candidate = item as Partial<GlossaryEntry>
+    const source = typeof candidate.source === 'string' ? candidate.source.trim() : ''
+    const target = typeof candidate.target === 'string' ? candidate.target.trim() : ''
+    if (source.length === 0 || target.length === 0) {
+      return
+    }
+    const domain =
+      candidate.domain === 'network-cisco' ||
+      candidate.domain === 'network-huawei' ||
+      candidate.domain === 'network-h3c' ||
+      candidate.domain === 'network-ruijie' ||
+      candidate.domain === 'common'
+        ? candidate.domain
+        : 'common'
+    const matchType =
+      candidate.matchType === 'exact' || candidate.matchType === 'caseInsensitive' || candidate.matchType === 'pattern'
+        ? candidate.matchType
+        : 'exact'
+    next.push({
+      source,
+      target,
+      domain,
+      matchType,
+      caseInsensitive: candidate.caseInsensitive === true,
+      note: typeof candidate.note === 'string' ? candidate.note : '',
+      uiOnly: candidate.uiOnly === true,
+      wholeWord: candidate.wholeWord === true,
+    })
+  })
+  return next
+}
+
 const quoteShellArg = (value: string): string => {
   if (value.length === 0) {
     return "''"
@@ -754,6 +1252,7 @@ const buildSshCommand = (session: SessionEntry): string => {
   if (session.hostKeyMode === 'loose') {
     args.push('-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null')
   }
+  args.push('-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3')
   if (session.port !== 22) {
     args.push('-p', String(session.port))
   }
@@ -843,6 +1342,277 @@ const detectAutoContextId = (visibleLines: string[], contexts: CommandContext[])
   return null
 }
 
+const isPromptLikeTailLine = (line: string): boolean => {
+  const normalized = line.trimEnd()
+  if (normalized.length === 0 || normalized.length > 180) {
+    return false
+  }
+  if (/--More--|----\s*More\s*----|Press any key|More\.\.\.|More:/i.test(normalized)) {
+    return false
+  }
+  if (/^(?:<[^>\n]+>|\[[~*]?[^\]\n]+\]|[A-Za-z0-9._-]+(?:\([^)]+\))?[>#])\s*$/.test(normalized)) {
+    return true
+  }
+  if (/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?:\s+[^\s]+)*\s+[%$#]\s*$/.test(normalized)) {
+    return true
+  }
+  return false
+}
+
+const sanitizeTerminalExportText = (input: string): string => {
+  const lines: string[] = []
+  let current = ''
+  let cursor = 0
+
+  const flushLine = (): void => {
+    lines.push(current)
+    current = ''
+    cursor = 0
+  }
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]
+    if (char === '\n') {
+      flushLine()
+      continue
+    }
+    if (char === '\r') {
+      cursor = 0
+      continue
+    }
+    if (char === '\b' || char === String.fromCharCode(8)) {
+      cursor = Math.max(0, cursor - 1)
+      continue
+    }
+    if (char < ' ') {
+      continue
+    }
+
+    if (cursor >= current.length) {
+      current = `${current}${' '.repeat(cursor - current.length)}${char}`
+    } else {
+      current = `${current.slice(0, cursor)}${char}${current.slice(cursor + 1)}`
+    }
+    cursor += 1
+  }
+  flushLine()
+
+  return lines
+    .join('\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/--More--|----\s*More\s*----|Press any key|More\.\.\.|More:/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+}
+
+const isPagerPromptLine = (line: string): boolean => {
+  const normalized = line
+    .split(String.fromCharCode(8))
+    .join('')
+    .trim()
+    .toLocaleLowerCase()
+  if (normalized.length === 0) {
+    return false
+  }
+  if (/^-+\s*more\s*-+$/.test(normalized)) {
+    return true
+  }
+  if (/^--more--$/.test(normalized)) {
+    return true
+  }
+  if (/^more\.\.\.$/.test(normalized)) {
+    return true
+  }
+  if (/^press any key(?: to continue)?(?:\.\.\.)?$/.test(normalized)) {
+    return true
+  }
+  // Huawei/Cisco variants like "---- More ----", "More (Press 'Q' to break)"
+  if (normalized.includes('more')) {
+    if (
+      normalized.includes('press') ||
+      normalized.includes('q') ||
+      normalized.includes('break') ||
+      normalized.includes('next') ||
+      normalized.includes('-')
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+const readVisibleTerminalTailLines = (term: Terminal, count: number): string[] => {
+  const buffer = term.buffer.active
+  const startRow = Math.max(0, term.rows - Math.max(1, count))
+  const lines: string[] = []
+  for (let row = startRow; row < term.rows; row += 1) {
+    const line = buffer.getLine(buffer.baseY + row)
+    const text = line ? line.translateToString(true).trimEnd() : ''
+    if (text.length > 0) {
+      lines.push(text)
+    }
+  }
+  return lines
+}
+
+const readRenderedTerminalText = (term: Terminal): string => {
+  const buffer = term.buffer.active
+  const outputLines: string[] = []
+  let wrappedPrefix = ''
+
+  for (let row = 0; row < buffer.length; row += 1) {
+    const line = buffer.getLine(row)
+    const text = line ? line.translateToString(true) : ''
+    const isWrapped = Boolean(line?.isWrapped)
+
+    if (isWrapped) {
+      wrappedPrefix += text
+      continue
+    }
+
+    outputLines.push(wrappedPrefix.length > 0 ? `${wrappedPrefix}${text}` : text)
+    wrappedPrefix = ''
+  }
+
+  if (wrappedPrefix.length > 0) {
+    outputLines.push(wrappedPrefix)
+  }
+
+  return outputLines.join('\n')
+}
+
+const readTailLinesFromBuffer = (bufferText: string, count: number): string[] => {
+  return stripAnsiSequences(bufferText)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .slice(-Math.max(1, count))
+}
+
+const parseAutomationSteps = (rawContent: string): AutomationStep[] => {
+  const steps: AutomationStep[] = []
+  const lines = rawContent
+    .split('\n')
+    .map((line) => line.replace(/\r/g, ''))
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (line.length === 0 || line.startsWith('#')) {
+      continue
+    }
+    if (line === 'app.clear_view' || line === 'app.clear') {
+      steps.push({ kind: 'clearView' })
+      continue
+    }
+    if (line === 'app.export_visible' || line === 'app.export_text') {
+      steps.push({ kind: 'exportVisible' })
+      continue
+    }
+    if (line.startsWith('app.export_visible_to ')) {
+      const pathTemplate = line.slice('app.export_visible_to '.length).trim()
+      if (pathTemplate.length > 0) {
+        steps.push({ kind: 'exportVisibleTo', pathTemplate })
+      }
+      continue
+    }
+    if (line.startsWith('term.wait_prompt')) {
+      const timeoutToken = line.slice('term.wait_prompt'.length).trim()
+      const parsedTimeout = Number.parseInt(timeoutToken, 10)
+      const timeoutMs =
+        Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? Math.max(1500, Math.min(180_000, parsedTimeout))
+          : AUTOMATION_PROMPT_TIMEOUT_MS
+      steps.push({ kind: 'waitPrompt', timeoutMs })
+      continue
+    }
+    if (line.startsWith('time.sleep')) {
+      const timeoutToken = line.slice('time.sleep'.length).trim()
+      const parsedTimeout = Number.parseInt(timeoutToken, 10)
+      const timeoutMs =
+        Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? Math.max(50, Math.min(600_000, parsedTimeout))
+          : 1000
+      steps.push({ kind: 'sleep', timeoutMs })
+      continue
+    }
+    if (line.startsWith('term.send ')) {
+      steps.push({ kind: 'send', command: line.slice('term.send '.length) })
+      continue
+    }
+    if (line.startsWith('term.send_all ')) {
+      steps.push({ kind: 'sendAll', command: line.slice('term.send_all '.length) })
+      continue
+    }
+    if (line.startsWith('term.send_tabs ')) {
+      const payload = line.slice('term.send_tabs '.length).trim()
+      if (payload.length === 0) {
+        continue
+      }
+      const separatorIndex = payload.indexOf('::')
+      if (separatorIndex >= 0) {
+        const selector = payload.slice(0, separatorIndex).trim()
+        const command = payload.slice(separatorIndex + 2).trim()
+        if (selector.length > 0 && command.length > 0) {
+          steps.push({ kind: 'sendTabs', selector, command })
+          continue
+        }
+      }
+
+      const firstSpace = payload.indexOf(' ')
+      if (firstSpace > 0) {
+        const selector = payload.slice(0, firstSpace).trim()
+        const command = payload.slice(firstSpace + 1).trim()
+        if (selector.length > 0 && command.length > 0) {
+          steps.push({ kind: 'sendTabs', selector, command })
+          continue
+        }
+      }
+      continue
+    }
+    if (line.startsWith('term.mode ')) {
+      const payload = line.slice('term.mode '.length).trim()
+      const lowered = payload.toLocaleLowerCase()
+      if (['broadcast_all', 'all', 'broadcast'].includes(lowered)) {
+        steps.push({ kind: 'setMode', mode: 'all' })
+        continue
+      }
+      if (['current', 'single', 'clear', 'off'].includes(lowered)) {
+        steps.push({ kind: 'setMode', mode: 'current' })
+        continue
+      }
+      if (lowered.startsWith('tabs ')) {
+        const selector = payload.slice(5).trim()
+        if (selector.length > 0) {
+          steps.push({ kind: 'setMode', mode: 'tabs', selector })
+        }
+        continue
+      }
+      continue
+    }
+    if (line.startsWith('session.run_tag_group ')) {
+      const payload = line.slice('session.run_tag_group '.length).trim()
+      if (payload.length === 0) {
+        continue
+      }
+      const separatorIndex = payload.indexOf('::')
+      if (separatorIndex >= 0) {
+        const label = payload.slice(0, separatorIndex).trim()
+        const targetToken = payload.slice(separatorIndex + 2).trim().toLocaleLowerCase()
+        if (label.length > 0) {
+          const target: 'new' | 'current' = targetToken === 'new' ? 'new' : 'current'
+          steps.push({ kind: 'runTagGroup', label, target })
+        }
+        continue
+      }
+      steps.push({ kind: 'runTagGroup', label: payload, target: 'current' })
+      continue
+    }
+    steps.push({ kind: 'send', command: rawLine })
+  }
+
+  return steps
+}
+
 const initialStats: DebugStats = {
   scanRuns: 0,
   candidatesFound: 0,
@@ -867,17 +1637,23 @@ export const App = () => {
   const leftHostRef = useRef<HTMLDivElement | null>(null)
   const mirrorFrameRef = useRef<HTMLDivElement | null>(null)
   const selectionMenuRef = useRef<HTMLDivElement | null>(null)
+  const leftContextMenuRef = useRef<HTMLDivElement | null>(null)
+  const paramContextMenuRef = useRef<HTMLDivElement | null>(null)
+  const paramContextMenuTargetRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const selectionPopoverRef = useRef<HTMLDivElement | null>(null)
   const commandExplainPopoverRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const activeTerminalTabIdRef = useRef('term-tab-1')
+  const terminalTabsRef = useRef<TerminalTab[]>([{ id: 'term-tab-1', title: 'Tab 1' }])
   const terminalTabOrderRef = useRef<string[]>(['term-tab-1'])
   const terminalTabBuffersRef = useRef<Map<string, string>>(new Map([['term-tab-1', '']]))
   const terminalTabLogsRef = useRef<Map<string, SessionLogEvent[]>>(new Map([['term-tab-1', []]]))
   const terminalTabAliveRef = useRef<Map<string, boolean>>(new Map([['term-tab-1', true]]))
+  const terminalTabTransportRef = useRef<Map<string, TerminalTransport>>(new Map([['term-tab-1', 'pty']]))
   const terminalTabSessionNameRef = useRef<Map<string, string>>(new Map())
   const networkHintsByTabRef = useRef<Map<string, NetworkHints>>(new Map([['term-tab-1', defaultNetworkHints]]))
   const autoPagerRunsByTabRef = useRef<Map<string, number>>(new Map())
+  const automationRunningByTabRef = useRef<Map<string, boolean>>(new Map())
   const scanRunsRef = useRef(0)
   const commandConfigRef = useRef<CommandConfig>(initialCommandConfig)
   const activeContextIdRef = useRef(initialCommandConfig.defaultContextId)
@@ -909,9 +1685,13 @@ export const App = () => {
   const [leftPaneRatio, setLeftPaneRatio] = useState(0.5)
   const [isDraggingSplitter, setIsDraggingSplitter] = useState(false)
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState | null>(null)
+  const [leftContextMenu, setLeftContextMenu] = useState<LeftContextMenuState | null>(null)
+  const [paramContextMenu, setParamContextMenu] = useState<ParamContextMenuState | null>(null)
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null)
   const [selectionDraftTranslation, setSelectionDraftTranslation] = useState('')
   const [selectionPopoverStatus, setSelectionPopoverStatus] = useState('')
+  const [selectionOnlineProvider, setSelectionOnlineProvider] = useState<TermbridgeTranslationProvider>('google-free')
+  const [selectionOnlinePending, setSelectionOnlinePending] = useState(false)
   const [commandExplainPopover, setCommandExplainPopover] = useState<CommandExplainPopoverState | null>(null)
   const [commandExplainDraft, setCommandExplainDraft] = useState<CommandExplainDraftState | null>(null)
   const [commandExplainStatus, setCommandExplainStatus] = useState('')
@@ -939,6 +1719,7 @@ export const App = () => {
     normalizeDockSlots(readInitialDockSlots(), readInitialAppSettings().dockSlots),
   )
   const [automationConfig, setAutomationConfig] = useState<AutomationConfig>(() => readInitialAutomationConfig())
+  const selectionTranslateReqSeqRef = useRef(0)
 
   const runSnapshotNow = useCallback((): void => {
     runSnapshotRef.current?.()
@@ -950,15 +1731,20 @@ export const App = () => {
 
   useEffect(() => {
     terminalTabOrderRef.current = terminalTabs.map((tab) => tab.id)
+    terminalTabsRef.current = terminalTabs
   }, [terminalTabs])
 
   const updateTabAliveState = useCallback((tabId: string, alive: boolean): void => {
     terminalTabAliveRef.current.set(tabId, alive)
   }, [])
 
+  const updateTabTransport = useCallback((tabId: string, transport: TerminalTransport): void => {
+    terminalTabTransportRef.current.set(tabId, transport)
+  }, [])
+
   const appendTerminalTabBuffer = useCallback((tabId: string, chunk: string): void => {
     const previous = terminalTabBuffersRef.current.get(tabId) ?? ''
-    const maxBufferLength = 240_000
+    const maxBufferLength = 2_000_000
     const next = previous.length + chunk.length > maxBufferLength
       ? `${previous}${chunk}`.slice(-maxBufferLength)
       : `${previous}${chunk}`
@@ -1011,6 +1797,7 @@ export const App = () => {
     terminalTabBuffersRef.current.set(tabId, '')
     terminalTabLogsRef.current.set(tabId, [])
     terminalTabAliveRef.current.set(tabId, true)
+    terminalTabTransportRef.current.set(tabId, 'pty')
     networkHintsByTabRef.current.set(tabId, defaultNetworkHints)
     autoPagerRunsByTabRef.current.set(tabId, 0)
     setActiveTerminalTabId(tabId)
@@ -1021,13 +1808,16 @@ export const App = () => {
       void ptyClient.spawn(tabId, term.cols, term.rows)
         .then((spawned) => {
           updateTabAliveState(tabId, spawned)
+          if (spawned) {
+            updateTabTransport(tabId, 'pty')
+          }
           if (!spawned) {
             appendTerminalTabBuffer(tabId, '\r\n[pty spawn failed]\r\n')
           }
         })
     }
     return tabId
-  }, [appendTerminalTabBuffer, renderTerminalTabBuffer, updateTabAliveState])
+  }, [appendTerminalTabBuffer, renderTerminalTabBuffer, updateTabAliveState, updateTabTransport])
 
   const handleCreateTerminalTab = useCallback((): void => {
     createTerminalTab()
@@ -1072,6 +1862,7 @@ export const App = () => {
     terminalTabBuffersRef.current.delete(tabId)
     terminalTabLogsRef.current.delete(tabId)
     terminalTabAliveRef.current.delete(tabId)
+    terminalTabTransportRef.current.delete(tabId)
     terminalTabSessionNameRef.current.delete(tabId)
     networkHintsByTabRef.current.delete(tabId)
     autoPagerRunsByTabRef.current.delete(tabId)
@@ -1221,10 +2012,151 @@ export const App = () => {
     })
   }, [persistSessionCatalog, sessionCatalogConfig])
 
+  const handleBulkCreateSessions = useCallback((forms: Array<{
+    name: string
+    groupId: string
+    protocol: SessionProtocol
+    host: string
+    port: number
+    user: string
+    identityFile: string
+    hostKeyMode: 'ask' | 'loose'
+  }>): number => {
+    if (!Array.isArray(forms) || forms.length === 0) {
+      return 0
+    }
+    const now = new Date().toISOString()
+    const nextSessions: SessionEntry[] = []
+    for (const form of forms) {
+      const name = form.name.trim()
+      const host = form.host.trim()
+      const user = form.user.trim()
+      if (name.length === 0 || host.length === 0) {
+        continue
+      }
+      if (form.protocol === 'ssh' && user.length === 0) {
+        continue
+      }
+      nextSessions.push({
+        id: createSessionEntryId(),
+        name,
+        groupId: sessionCatalogConfig.groups.some((group) => group.id === form.groupId)
+          ? form.groupId
+          : sessionCatalogConfig.groups[0]?.id ?? 'linux',
+        protocol: form.protocol,
+        host,
+        port: Math.max(1, Math.min(65535, Math.round(form.port || 22))),
+        user: form.protocol === 'ssh' ? user : undefined,
+        authMode: form.protocol === 'ssh' ? 'system' : undefined,
+        identityFile: form.protocol === 'ssh' && form.identityFile.trim().length > 0 ? form.identityFile.trim() : undefined,
+        hostKeyMode: form.protocol === 'ssh' ? form.hostKeyMode : undefined,
+        updatedAt: now,
+      })
+    }
+    if (nextSessions.length === 0) {
+      return 0
+    }
+    persistSessionCatalog({
+      ...sessionCatalogConfig,
+      sessions: [...nextSessions, ...sessionCatalogConfig.sessions],
+    })
+    return nextSessions.length
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
   const handleDeleteSession = useCallback((session: SessionEntry): void => {
     persistSessionCatalog({
       ...sessionCatalogConfig,
       sessions: sessionCatalogConfig.sessions.filter((item) => item.id !== session.id),
+      tagGroups: sessionCatalogConfig.tagGroups.map((group) => ({
+        ...group,
+        sessionIds: group.sessionIds.filter((id) => id !== session.id),
+      })),
+    })
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
+  const handleBulkDeleteSessionGroups = useCallback((groupIds: string[]): void => {
+    const targets = new Set(
+      groupIds.filter((id) => sessionCatalogConfig.groups.some((group) => group.id === id)),
+    )
+    if (targets.size === 0) {
+      return
+    }
+    const removableGroups = sessionCatalogConfig.groups.filter((group) => !targets.has(group.id))
+    if (removableGroups.length === 0) {
+      return
+    }
+    persistSessionCatalog({
+      ...sessionCatalogConfig,
+      groups: removableGroups,
+      sessions: sessionCatalogConfig.sessions.filter((session) => !targets.has(session.groupId)),
+      tagGroups: sessionCatalogConfig.tagGroups.map((group) => ({
+        ...group,
+        sessionIds: group.sessionIds.filter((id) =>
+          sessionCatalogConfig.sessions.some((session) => session.id === id && !targets.has(session.groupId))),
+      })),
+    })
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
+  const handleBulkDeleteSessions = useCallback((sessionIds: string[]): void => {
+    const targets = new Set(sessionIds)
+    if (targets.size === 0) {
+      return
+    }
+    persistSessionCatalog({
+      ...sessionCatalogConfig,
+      sessions: sessionCatalogConfig.sessions.filter((session) => !targets.has(session.id)),
+      tagGroups: sessionCatalogConfig.tagGroups.map((group) => ({
+        ...group,
+        sessionIds: group.sessionIds.filter((id) => !targets.has(id)),
+      })),
+    })
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
+  const handleUpsertSessionTagGroup = useCallback((input: {
+    id?: string
+    label: string
+    sessionIds: string[]
+  }): void => {
+    const label = input.label.trim()
+    if (label.length === 0) {
+      return
+    }
+    const existingSessionIds = new Set(sessionCatalogConfig.sessions.map((session) => session.id))
+    const sessionIds = Array.from(new Set(input.sessionIds.filter((id) => existingSessionIds.has(id))))
+    const nextGroup: SessionTagGroup = {
+      id: input.id ?? createSessionTagGroupId(),
+      label,
+      sessionIds,
+      updatedAt: new Date().toISOString(),
+    }
+    const existingIndex = sessionCatalogConfig.tagGroups.findIndex((group) => group.id === nextGroup.id)
+    if (existingIndex >= 0) {
+      const nextGroups = [...sessionCatalogConfig.tagGroups]
+      nextGroups[existingIndex] = nextGroup
+      persistSessionCatalog({
+        ...sessionCatalogConfig,
+        tagGroups: nextGroups,
+      })
+      return
+    }
+    persistSessionCatalog({
+      ...sessionCatalogConfig,
+      tagGroups: [nextGroup, ...sessionCatalogConfig.tagGroups],
+    })
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
+  const handleDeleteSessionTagGroup = useCallback((id: string): void => {
+    const target = sessionCatalogConfig.tagGroups.find((group) => group.id === id)
+    if (!target) {
+      return
+    }
+    const confirmed = window.confirm(`确定删除标签分组「${target.label}」？`)
+    if (!confirmed) {
+      return
+    }
+    persistSessionCatalog({
+      ...sessionCatalogConfig,
+      tagGroups: sessionCatalogConfig.tagGroups.filter((group) => group.id !== id),
     })
   }, [persistSessionCatalog, sessionCatalogConfig])
 
@@ -1320,10 +2252,17 @@ export const App = () => {
   }, [persistSessionCatalog, sessionCatalogConfig])
 
   const handleDeleteLocalPortPack = useCallback((pack: LocalPortPackConfig): void => {
+    const removedSessionIds = new Set(
+      sessionCatalogConfig.sessions.filter((session) => session.packId === pack.id).map((session) => session.id),
+    )
     persistSessionCatalog({
       ...sessionCatalogConfig,
       sessions: sessionCatalogConfig.sessions.filter((session) => session.packId !== pack.id),
       localPortPacks: sessionCatalogConfig.localPortPacks.filter((item) => item.id !== pack.id),
+      tagGroups: sessionCatalogConfig.tagGroups.map((group) => ({
+        ...group,
+        sessionIds: group.sessionIds.filter((id) => !removedSessionIds.has(id)),
+      })),
     })
   }, [persistSessionCatalog, sessionCatalogConfig])
 
@@ -1343,6 +2282,36 @@ export const App = () => {
     }
   }, [])
 
+  const restoreTabToShell = useCallback((tabId: string, restoredNotice?: string): void => {
+    const term = termRef.current
+    if (!term) {
+      return
+    }
+    updateTabTransport(tabId, 'pty')
+    void ptyClient.spawn(tabId, term.cols, term.rows).then((spawned) => {
+      updateTabAliveState(tabId, spawned)
+      if (!spawned) {
+        const failedMessage = '\r\n[shell restore failed]\r\n'
+        appendTerminalTabBuffer(tabId, failedMessage)
+        appendTerminalTabLog(tabId, 'output', failedMessage)
+        if (tabId === activeTerminalTabIdRef.current) {
+          term.write(failedMessage)
+        }
+        runSnapshotNow()
+        return
+      }
+      updateTabTransport(tabId, 'pty')
+      if (restoredNotice) {
+        appendTerminalTabBuffer(tabId, restoredNotice)
+        appendTerminalTabLog(tabId, 'output', restoredNotice)
+        if (tabId === activeTerminalTabIdRef.current) {
+          term.write(restoredNotice)
+        }
+      }
+      runSnapshotNow()
+    })
+  }, [appendTerminalTabBuffer, appendTerminalTabLog, runSnapshotNow, updateTabAliveState, updateTabTransport])
+
   const connectSessionToTab = useCallback((session: SessionEntry, tabId: string): void => {
     if (session.protocol === 'ssh' && session.hostKeyMode === 'loose') {
       const confirmed = window.confirm(
@@ -1358,14 +2327,20 @@ export const App = () => {
       terminalTabSessionNameRef.current.set(tabId, session.name)
 
       if (session.protocol === 'telnet' || session.protocol === 'raw') {
+        updateTabTransport(tabId, 'local')
         void ptyClient.connectLocal(tabId, session.host, session.port, session.protocol)
           .then((connected) => {
             updateTabAliveState(tabId, connected)
             if (!connected) {
               setSessionExportStatus(`连接失败：无法连接 ${session.host}:${session.port}`)
+              restoreTabToShell(tabId, '\r\n[returned to local shell]\r\n')
               return
             }
-            setSidePanelMode('none')
+          })
+          .catch(() => {
+            updateTabAliveState(tabId, false)
+            setSessionExportStatus(`连接失败：无法连接 ${session.host}:${session.port}`)
+            restoreTabToShell(tabId, '\r\n[returned to local shell]\r\n')
           })
         return
       }
@@ -1376,10 +2351,16 @@ export const App = () => {
         return
       }
       writeToTabImmediateWithLog(tabId, command)
-      setSidePanelMode('none')
     }
 
-    if (terminalTabAliveRef.current.get(tabId) ?? false) {
+    if (session.protocol === 'telnet' || session.protocol === 'raw') {
+      connectWithProtocol()
+      return
+    }
+
+    const currentTransport = terminalTabTransportRef.current.get(tabId) ?? 'pty'
+    const shouldRespawnPty = session.protocol === 'ssh' && currentTransport !== 'pty'
+    if (!shouldRespawnPty && (terminalTabAliveRef.current.get(tabId) ?? false)) {
       connectWithProtocol()
       return
     }
@@ -1389,15 +2370,17 @@ export const App = () => {
       return
     }
 
+    updateTabTransport(tabId, 'pty')
     void ptyClient.spawn(tabId, term.cols, term.rows).then((spawned) => {
       updateTabAliveState(tabId, spawned)
       if (!spawned) {
         setSessionExportStatus('当前标签重连失败，请新建标签后重试')
         return
       }
+      updateTabTransport(tabId, 'pty')
       connectWithProtocol()
     })
-  }, [updateTabAliveState, updateTerminalTabTitle, writeToTabImmediateWithLog])
+  }, [restoreTabToShell, updateTabAliveState, updateTabTransport, updateTerminalTabTitle, writeToTabImmediateWithLog])
 
   const handleConnectSessionCurrentTab = useCallback((session: SessionEntry): void => {
     connectSessionToTab(session, activeTerminalTabIdRef.current)
@@ -1410,6 +2393,49 @@ export const App = () => {
       connectSessionToTab(session, tabId)
     }, 60)
   }, [connectSessionToTab, createTerminalTab])
+
+  const runSessionTagGroup = useCallback((tagGroupId: string, target: 'current' | 'new'): number => {
+    const tagGroup = sessionCatalogConfig.tagGroups.find((group) => group.id === tagGroupId)
+    if (!tagGroup) {
+      return 0
+    }
+    const sessionMap = new Map(sessionCatalogConfig.sessions.map((session) => [session.id, session]))
+    const sessions = tagGroup.sessionIds
+      .map((id) => sessionMap.get(id))
+      .filter((session): session is SessionEntry => Boolean(session))
+    if (sessions.length === 0) {
+      setSessionExportStatus(`标签分组「${tagGroup.label}」中没有可连接设备`)
+      return 0
+    }
+
+    if (target === 'current') {
+      connectSessionToTab(sessions[0], activeTerminalTabIdRef.current)
+      for (let index = 1; index < sessions.length; index += 1) {
+        const session = sessions[index]
+        const tabId = createTerminalTab(session.name)
+        window.setTimeout(() => {
+          connectSessionToTab(session, tabId)
+        }, 60 + index * 30)
+      }
+    } else {
+      sessions.forEach((session, index) => {
+        const tabId = createTerminalTab(session.name)
+        window.setTimeout(() => {
+          connectSessionToTab(session, tabId)
+        }, 60 + index * 30)
+      })
+    }
+    setSessionExportStatus(`标签分组已启动连接：${tagGroup.label} (${sessions.length} 台)`)
+    return sessions.length
+  }, [connectSessionToTab, createTerminalTab, sessionCatalogConfig])
+
+  const handleConnectSessionTagGroupCurrent = useCallback((tagGroupId: string): void => {
+    runSessionTagGroup(tagGroupId, 'current')
+  }, [runSessionTagGroup])
+
+  const handleConnectSessionTagGroupNew = useCallback((tagGroupId: string): void => {
+    runSessionTagGroup(tagGroupId, 'new')
+  }, [runSessionTagGroup])
 
   const applyTranslationConfigPayload = useCallback(
     (payload: TermbridgeTranslationConfigPayload, status: string): void => {
@@ -1594,6 +2620,58 @@ export const App = () => {
     [commandDockSlots, persistDockSlots],
   )
 
+  useEffect(() => {
+    const onGlobalShortcut = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target) {
+        const tagName = target.tagName?.toLowerCase() ?? ''
+        const editable = target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select'
+        if (editable) {
+          return
+        }
+      }
+
+      const normalizedKey = event.key.toLowerCase()
+
+      if (appSettings.shortcutNextTerminalTab === 'ctrl+tab' && event.ctrlKey && !event.shiftKey && normalizedKey === 'tab') {
+        event.preventDefault()
+        const currentIndex = terminalTabs.findIndex((tab) => tab.id === activeTerminalTabIdRef.current)
+        if (currentIndex >= 0 && terminalTabs.length > 1) {
+          const nextIndex = (currentIndex + 1) % terminalTabs.length
+          handleSwitchTerminalTab(terminalTabs[nextIndex].id)
+        }
+        return
+      }
+
+      if (appSettings.shortcutNextTerminalTab === 'ctrl+shift+tab' && event.ctrlKey && event.shiftKey && normalizedKey === 'tab') {
+        event.preventDefault()
+        const currentIndex = terminalTabs.findIndex((tab) => tab.id === activeTerminalTabIdRef.current)
+        if (currentIndex >= 0 && terminalTabs.length > 1) {
+          const nextIndex = (currentIndex - 1 + terminalTabs.length) % terminalTabs.length
+          handleSwitchTerminalTab(terminalTabs[nextIndex].id)
+        }
+        return
+      }
+
+      const startFn = parseFunctionKeyNumber(appSettings.dockShortcutStart)
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && normalizedKey.startsWith('f')) {
+        const fnNumber = Number.parseInt(normalizedKey.slice(1), 10)
+        if (Number.isFinite(fnNumber)) {
+          const slotIndex = fnNumber - startFn
+          if (slotIndex >= 0 && slotIndex < commandDockSlots.length && commandDockSlots[slotIndex]) {
+            event.preventDefault()
+            handleRunDockSlot(slotIndex)
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onGlobalShortcut)
+    return () => {
+      window.removeEventListener('keydown', onGlobalShortcut)
+    }
+  }, [appSettings.dockShortcutStart, appSettings.shortcutNextTerminalTab, commandDockSlots, handleRunDockSlot, handleSwitchTerminalTab, terminalTabs])
+
   const persistCommandCatalog = useCallback((nextConfig: CommandCatalogConfig): void => {
     setCommandCatalogConfig(nextConfig)
     try {
@@ -1717,6 +2795,31 @@ export const App = () => {
     [commandCatalogConfig, persistCommandCatalog],
   )
 
+  const handleBulkDeleteCatalogGroups = useCallback((groupIds: string[]): void => {
+    const targets = new Set(
+      groupIds.filter((id) => commandCatalogConfig.groups.some((group) => group.id === id && !group.system)),
+    )
+    if (targets.size === 0) {
+      return
+    }
+    persistCommandCatalog({
+      ...commandCatalogConfig,
+      groups: commandCatalogConfig.groups.filter((group) => !targets.has(group.id)),
+      entries: commandCatalogConfig.entries.filter((entry) => !targets.has(entry.groupId)),
+    })
+  }, [commandCatalogConfig, persistCommandCatalog])
+
+  const handleBulkDeleteCatalogEntries = useCallback((entryIds: string[]): void => {
+    const targets = new Set(entryIds)
+    if (targets.size === 0) {
+      return
+    }
+    persistCommandCatalog({
+      ...commandCatalogConfig,
+      entries: commandCatalogConfig.entries.filter((entry) => !targets.has(entry.id)),
+    })
+  }, [commandCatalogConfig, persistCommandCatalog])
+
   const handleReorderCatalogEntries = useCallback(
     (sourceEntryId: string, targetEntryId: string): void => {
       if (sourceEntryId === targetEntryId) {
@@ -1774,6 +2877,22 @@ export const App = () => {
 
   const handleDeleteUserExplainRule = useCallback((id: string): void => {
     setUserExplainRules((previous) => previous.filter((item) => item.id !== id))
+  }, [])
+
+  const handleBulkDeleteUserExplainRules = useCallback((ids: string[]): void => {
+    const targets = new Set(ids)
+    if (targets.size === 0) {
+      return
+    }
+    setUserExplainRules((previous) => previous.filter((item) => !targets.has(item.id)))
+  }, [])
+
+  const handleBulkDeleteExplainContexts = useCallback((contexts: ExplainContext[]): void => {
+    const targets = new Set(contexts)
+    if (targets.size === 0) {
+      return
+    }
+    setUserExplainRules((previous) => previous.filter((item) => !targets.has(item.context)))
   }, [])
 
   const toggleSidePanel = useCallback((target: Exclude<SidePanelMode, 'none'>): void => {
@@ -1869,6 +2988,298 @@ export const App = () => {
       // ignore localStorage write failures
     }
   }, [])
+
+  const exportSessionExchange = useCallback((): void => {
+    const bundle: DataExchangeBundle = {
+      schema: DATA_EXCHANGE_SCHEMA,
+      module: 'sessions',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      payload: sessionCatalogConfig,
+    }
+    downloadJsonFile(`termbridge-sessions-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, bundle)
+  }, [sessionCatalogConfig])
+
+  const importSessionExchange = useCallback((): void => {
+    void pickJsonFileText().then((raw) => {
+      if (!raw) {
+        return
+      }
+      try {
+        const parsed = JSON.parse(raw) as DataExchangeBundle
+        if (parsed.schema !== DATA_EXCHANGE_SCHEMA || parsed.module !== 'sessions') {
+          window.alert('导入失败：文件不是会话管理交换包')
+          return
+        }
+        const incoming = normalizeSessionCatalogConfig(parsed.payload)
+        const merged = mergeSessionCatalogForImport(sessionCatalogConfig, incoming)
+        persistSessionCatalog(merged)
+        window.alert(`导入完成：会话总数 ${merged.sessions.length}`)
+      } catch {
+        window.alert('导入失败：JSON 格式无效')
+      }
+    })
+  }, [persistSessionCatalog, sessionCatalogConfig])
+
+  const exportAutomationExchange = useCallback((): void => {
+    const bundle: DataExchangeBundle = {
+      schema: DATA_EXCHANGE_SCHEMA,
+      module: 'automation',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      payload: automationConfig,
+    }
+    downloadJsonFile(`termbridge-automation-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, bundle)
+  }, [automationConfig])
+
+  const importAutomationExchange = useCallback((): void => {
+    void pickJsonFileText().then((raw) => {
+      if (!raw) {
+        return
+      }
+      try {
+        const parsed = JSON.parse(raw) as DataExchangeBundle
+        if (parsed.schema !== DATA_EXCHANGE_SCHEMA || parsed.module !== 'automation') {
+          window.alert('导入失败：文件不是自动化交换包')
+          return
+        }
+        const incoming = normalizeAutomationStorage(parsed.payload)
+        const merged = mergeAutomationConfigForImport(automationConfig, incoming)
+        persistAutomationConfig(merged)
+        window.alert(`导入完成：脚本总数 ${merged.scripts.length}`)
+      } catch {
+        window.alert('导入失败：JSON 格式无效')
+      }
+    })
+  }, [automationConfig, persistAutomationConfig])
+
+  const exportCommandCatalogExchange = useCallback((): void => {
+    const bundle: DataExchangeBundle = {
+      schema: DATA_EXCHANGE_SCHEMA,
+      module: 'command-catalog',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      payload: commandCatalogConfig,
+    }
+    downloadJsonFile(`termbridge-command-catalog-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, bundle)
+  }, [commandCatalogConfig])
+
+  const importCommandCatalogExchange = useCallback((): void => {
+    void pickJsonFileText().then((raw) => {
+      if (!raw) {
+        return
+      }
+      try {
+        const parsed = JSON.parse(raw) as DataExchangeBundle
+        if (parsed.schema !== DATA_EXCHANGE_SCHEMA || parsed.module !== 'command-catalog') {
+          window.alert('导入失败：文件不是命令检索交换包')
+          return
+        }
+        const incoming = normalizeCatalogConfig(parsed.payload)
+        const merged = mergeCommandCatalogForImport(commandCatalogConfig, incoming)
+        persistCommandCatalog(merged)
+        window.alert(`导入完成：命令条目总数 ${merged.entries.length}`)
+      } catch {
+        window.alert('导入失败：JSON 格式无效')
+      }
+    })
+  }, [commandCatalogConfig, persistCommandCatalog])
+
+  const exportCommandExplainExchange = useCallback((): void => {
+    const bundle: DataExchangeBundle = {
+      schema: DATA_EXCHANGE_SCHEMA,
+      module: 'command-explain',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      payload: userExplainRules,
+    }
+    downloadJsonFile(`termbridge-command-explain-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, bundle)
+  }, [userExplainRules])
+
+  const exportAllDataExchange = useCallback((): void => {
+    const exportedAt = new Date().toISOString()
+    const pack: DataExchangePack = {
+      schema: DATA_EXCHANGE_PACK_SCHEMA,
+      packType: 'all-modules',
+      version: 1,
+      exportedAt,
+      modules: [
+        {
+          schema: DATA_EXCHANGE_SCHEMA,
+          module: 'glossary',
+          version: 1,
+          exportedAt,
+          payload: glossaryEntries,
+        },
+        {
+          schema: DATA_EXCHANGE_SCHEMA,
+          module: 'sessions',
+          version: 1,
+          exportedAt,
+          payload: sessionCatalogConfig,
+        },
+        {
+          schema: DATA_EXCHANGE_SCHEMA,
+          module: 'automation',
+          version: 1,
+          exportedAt,
+          payload: automationConfig,
+        },
+        {
+          schema: DATA_EXCHANGE_SCHEMA,
+          module: 'command-catalog',
+          version: 1,
+          exportedAt,
+          payload: commandCatalogConfig,
+        },
+        {
+          schema: DATA_EXCHANGE_SCHEMA,
+          module: 'command-explain',
+          version: 1,
+          exportedAt,
+          payload: userExplainRules,
+        },
+      ],
+    }
+    downloadJsonFile(`termbridge-all-modules-${exportedAt.replace(/[:.]/g, '-')}.json`, pack)
+  }, [automationConfig, commandCatalogConfig, glossaryEntries, sessionCatalogConfig, userExplainRules])
+
+  const importAllDataExchange = useCallback((): void => {
+    void pickJsonFileText().then(async (raw) => {
+      if (!raw) {
+        return
+      }
+      try {
+        const parsed = JSON.parse(raw) as DataExchangePack
+        if (parsed.schema !== DATA_EXCHANGE_PACK_SCHEMA || parsed.packType !== 'all-modules' || !Array.isArray(parsed.modules)) {
+          window.alert('导入失败：文件不是全部模块交换包')
+          return
+        }
+
+        let nextSessions = sessionCatalogConfig
+        let nextAutomation = automationConfig
+        let nextCommandCatalog = commandCatalogConfig
+        let nextExplainRules = userExplainRules
+        let glossaryImported = 0
+        let glossaryFailed = 0
+        let glossaryPayload: TermbridgeGlossaryPayload | null = null
+        const glossaryKeySet = new Set(
+          glossaryEntries.map((item) => `${item.domain ?? 'common'}|${item.matchType ?? 'exact'}|${item.source.toLowerCase()}|${item.target.toLowerCase()}`),
+        )
+
+        for (const moduleBundle of parsed.modules) {
+          if (!moduleBundle || moduleBundle.schema !== DATA_EXCHANGE_SCHEMA) {
+            continue
+          }
+          if (moduleBundle.module === 'sessions') {
+            const incoming = normalizeSessionCatalogConfig(moduleBundle.payload)
+            nextSessions = mergeSessionCatalogForImport(nextSessions, incoming)
+            continue
+          }
+          if (moduleBundle.module === 'automation') {
+            const incoming = normalizeAutomationStorage(moduleBundle.payload)
+            nextAutomation = mergeAutomationConfigForImport(nextAutomation, incoming)
+            continue
+          }
+          if (moduleBundle.module === 'command-catalog') {
+            const incoming = normalizeCatalogConfig(moduleBundle.payload)
+            nextCommandCatalog = mergeCommandCatalogForImport(nextCommandCatalog, incoming)
+            continue
+          }
+          if (moduleBundle.module === 'command-explain') {
+            const incoming = normalizeUserExplainRules(moduleBundle.payload)
+            nextExplainRules = mergeExplainRulesForImport(nextExplainRules, incoming)
+            continue
+          }
+          if (moduleBundle.module === 'glossary') {
+            const incoming = normalizeGlossaryEntriesForImport(moduleBundle.payload)
+            for (const entry of incoming) {
+              const key = `${entry.domain ?? 'common'}|${entry.matchType ?? 'exact'}|${entry.source.toLowerCase()}|${entry.target.toLowerCase()}`
+              if (glossaryKeySet.has(key)) {
+                continue
+              }
+              try {
+                glossaryPayload = await window.termbridge.upsertGlossaryEntry({
+                  source: entry.source,
+                  target: entry.target,
+                  domain: entry.domain,
+                  matchType: entry.matchType,
+                  caseInsensitive: entry.caseInsensitive,
+                  note: entry.note,
+                  uiOnly: entry.uiOnly,
+                  wholeWord: entry.wholeWord,
+                })
+                glossaryKeySet.add(key)
+                glossaryImported += 1
+              } catch {
+                glossaryFailed += 1
+              }
+            }
+          }
+        }
+
+        if (nextSessions !== sessionCatalogConfig) {
+          persistSessionCatalog(nextSessions)
+        }
+        if (nextAutomation !== automationConfig) {
+          persistAutomationConfig(nextAutomation)
+        }
+        if (nextCommandCatalog !== commandCatalogConfig) {
+          persistCommandCatalog(nextCommandCatalog)
+        }
+        if (nextExplainRules !== userExplainRules) {
+          setUserExplainRules(nextExplainRules)
+        }
+        if (glossaryPayload) {
+          applyGlossaryPayload(glossaryPayload, 'imported')
+        }
+
+        window.alert(
+          [
+            '全部模块导入完成',
+            `会话: ${nextSessions.sessions.length}`,
+            `自动化: ${nextAutomation.scripts.length}`,
+            `命令检索: ${nextCommandCatalog.entries.length}`,
+            `配置解读: ${nextExplainRules.length}`,
+            `词库新增: ${glossaryImported}${glossaryFailed > 0 ? `（失败 ${glossaryFailed}）` : ''}`,
+          ].join('\n'),
+        )
+      } catch {
+        window.alert('导入失败：JSON 格式无效')
+      }
+    })
+  }, [
+    applyGlossaryPayload,
+    automationConfig,
+    commandCatalogConfig,
+    glossaryEntries,
+    persistAutomationConfig,
+    persistCommandCatalog,
+    persistSessionCatalog,
+    sessionCatalogConfig,
+    userExplainRules,
+  ])
+
+  const importCommandExplainExchange = useCallback((): void => {
+    void pickJsonFileText().then((raw) => {
+      if (!raw) {
+        return
+      }
+      try {
+        const parsed = JSON.parse(raw) as DataExchangeBundle
+        if (parsed.schema !== DATA_EXCHANGE_SCHEMA || parsed.module !== 'command-explain') {
+          window.alert('导入失败：文件不是配置解读交换包')
+          return
+        }
+        const incoming = normalizeUserExplainRules(parsed.payload)
+        const merged = mergeExplainRulesForImport(userExplainRules, incoming)
+        setUserExplainRules(merged)
+        window.alert(`导入完成：规则总数 ${merged.length}`)
+      } catch {
+        window.alert('导入失败：JSON 格式无效')
+      }
+    })
+  }, [userExplainRules])
 
   const handleAddAutomationGroup = useCallback(
     (label: string): void => {
@@ -1979,6 +3390,31 @@ export const App = () => {
     [automationConfig, persistAutomationConfig],
   )
 
+  const handleBulkDeleteAutomationGroups = useCallback((groupIds: string[]): void => {
+    const targets = new Set(
+      groupIds.filter((id) => automationConfig.groups.some((group) => group.id === id && !group.system)),
+    )
+    if (targets.size === 0) {
+      return
+    }
+    persistAutomationConfig({
+      ...automationConfig,
+      groups: automationConfig.groups.filter((group) => !targets.has(group.id)),
+      scripts: automationConfig.scripts.filter((script) => !targets.has(script.groupId)),
+    })
+  }, [automationConfig, persistAutomationConfig])
+
+  const handleBulkDeleteAutomationScripts = useCallback((scriptIds: string[]): void => {
+    const targets = new Set(scriptIds)
+    if (targets.size === 0) {
+      return
+    }
+    persistAutomationConfig({
+      ...automationConfig,
+      scripts: automationConfig.scripts.filter((script) => !targets.has(script.id)),
+    })
+  }, [automationConfig, persistAutomationConfig])
+
   const handleReorderAutomationScripts = useCallback(
     (sourceScriptId: string, targetScriptId: string): void => {
       if (sourceScriptId === targetScriptId) {
@@ -2002,6 +3438,114 @@ export const App = () => {
     [automationConfig, persistAutomationConfig],
   )
 
+  const clearVisibleTerminalForTab = useCallback((tabId: string): void => {
+    terminalTabBuffersRef.current.set(tabId, '')
+    terminalTabLogsRef.current.set(tabId, [])
+    if (tabId === activeTerminalTabIdRef.current) {
+      renderTerminalTabBuffer(tabId)
+      runSnapshotNow()
+    }
+  }, [renderTerminalTabBuffer, runSnapshotNow])
+
+  const exportVisibleTerminalForTab = useCallback(async (
+    tabId: string,
+    autoPathTemplate?: string,
+  ): Promise<TermbridgeSessionLogExportResult> => {
+    const tabTitle = terminalTabs.find((tab) => tab.id === tabId)?.title ?? tabId
+    const sessionName = terminalTabSessionNameRef.current.get(tabId) ?? tabTitle
+    const activeTerm = termRef.current
+    const renderedText =
+      activeTerm && tabId === activeTerminalTabIdRef.current
+        ? readRenderedTerminalText(activeTerm)
+        : ''
+    const fullBuffer = terminalTabBuffersRef.current.get(tabId) ?? ''
+    const cleanText =
+      renderedText.length > 0
+        ? renderedText
+        : sanitizeTerminalExportText(stripAnsiSequences(fullBuffer))
+    const jsonl = cleanText.length > 0
+      ? JSON.stringify({
+        ts: new Date().toISOString(),
+        tabId,
+        direction: 'output',
+        data: cleanText,
+        snapshot: true,
+      })
+      : ''
+
+    const result = await window.termbridge.exportSessionLog({
+      tabId,
+      tabTitle,
+      sessionName,
+      cleanText,
+      jsonl,
+      autoPathTemplate,
+    })
+    if (!result) {
+      setSessionExportStatus(autoPathTemplate ? '自动导出失败' : '导出已取消')
+      return null
+    }
+    setSessionExportStatus(`${autoPathTemplate ? '已自动导出' : '已导出当前显示文本'}：${result.txtPath}`)
+    return result
+  }, [terminalTabs])
+
+  const waitForOutputSettleBeforeExport = useCallback(async (tabId: string, timeoutMs = 90_000): Promise<boolean> => {
+    const startedAt = Date.now()
+    let seenPager = false
+    while (Date.now() - startedAt <= timeoutMs) {
+      const alive = terminalTabAliveRef.current.get(tabId) ?? false
+      if (!alive) {
+        return false
+      }
+
+      const activeTerm = termRef.current
+      const recentLines = activeTerm && tabId === activeTerminalTabIdRef.current
+        ? readVisibleTerminalTailLines(activeTerm, 3)
+        : readTailLinesFromBuffer(terminalTabBuffersRef.current.get(tabId) ?? '', 3)
+      const hasHuaweiReturnTail = recentLines.some((line) => line.toLocaleLowerCase().includes('return'))
+      const hasPagerInRecentLines = recentLines.some((line) => isPagerPromptLine(line))
+      if (hasHuaweiReturnTail || !hasPagerInRecentLines) {
+        if (hasHuaweiReturnTail) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 500)
+          })
+          return true
+        }
+        if (seenPager) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 500)
+          })
+          return true
+        }
+      }
+      if (hasPagerInRecentLines) {
+        seenPager = true
+      }
+      // Active paging: send space until return appears or pager disappears after being seen.
+      writeToTabImmediateWithLog(tabId, ' ')
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 800)
+      })
+    }
+    return false
+  }, [writeToTabImmediateWithLog])
+
+  const waitForPromptReady = useCallback(async (tabId: string, timeoutMs: number): Promise<boolean> => {
+    const settled = await waitForOutputSettleBeforeExport(tabId, timeoutMs)
+    if (!settled) {
+      return false
+    }
+    const activeTerm = termRef.current
+    const recentLines = activeTerm && tabId === activeTerminalTabIdRef.current
+      ? readVisibleTerminalTailLines(activeTerm, 3)
+      : readTailLinesFromBuffer(terminalTabBuffersRef.current.get(tabId) ?? '', 3)
+    const lastLine = recentLines[recentLines.length - 1] ?? ''
+    if (isPromptLikeTailLine(lastLine)) {
+      return true
+    }
+    return recentLines.some((line) => line.toLocaleLowerCase().includes('return'))
+  }, [waitForOutputSettleBeforeExport])
+
   const handleRunAutomationScript = useCallback((script: AutomationScript): void => {
     const command = script.content.trim()
     if (command.length === 0) {
@@ -2015,8 +3559,304 @@ export const App = () => {
       }
     }
 
-    writeToTabImmediateWithLog(activeTerminalTabIdRef.current, command.endsWith('\n') ? command : `${command}\n`)
-  }, [writeToTabImmediateWithLog])
+    const tabId = activeTerminalTabIdRef.current
+    if (!(terminalTabAliveRef.current.get(tabId) ?? false)) {
+      setSessionExportStatus('当前标签会话已断开，请先重连或新建标签')
+      return
+    }
+    if (automationRunningByTabRef.current.get(tabId)) {
+      setSessionExportStatus('当前标签已有自动化任务在执行，请稍后再试')
+      return
+    }
+    automationRunningByTabRef.current.set(tabId, true)
+
+    void (async () => {
+      try {
+        const hasActionToken = /(?:^|\n)\s*(?:app\.(?:clear_view|clear|export_visible|export_text)|term\.(?:wait_prompt|send|send_all|send_tabs|mode)\b|session\.run_tag_group\b|time\.sleep\b)/m
+          .test(script.content)
+        if (!hasActionToken) {
+          writeToTabImmediateWithLog(tabId, command.endsWith('\n') ? command : `${command}\n`)
+          return
+        }
+
+        const steps = parseAutomationSteps(script.content)
+        if (steps.length === 0) {
+          return
+        }
+
+        const resolveTargetTabs = (selector: string): string[] => {
+          const tabs = terminalTabsRef.current
+          const tokens = selector
+            .split(',')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+          if (tokens.length === 0) {
+            return []
+          }
+          if (tokens.length === 1 && /^(?:all|\*)$/i.test(tokens[0])) {
+            return tabs
+              .map((tab) => tab.id)
+              .filter((id) => terminalTabAliveRef.current.get(id) ?? false)
+          }
+
+          const byId = new Map(tabs.map((tab) => [tab.id.toLocaleLowerCase(), tab.id]))
+          const byTitle = new Map(tabs.map((tab) => [tab.title.trim().toLocaleLowerCase(), tab.id]))
+          const resolved: string[] = []
+          const seen = new Set<string>()
+          for (const token of tokens) {
+            const lowered = token.toLocaleLowerCase()
+            let resolvedId: string | undefined
+            if (byId.has(lowered)) {
+              resolvedId = byId.get(lowered)
+            } else if (byTitle.has(lowered)) {
+              resolvedId = byTitle.get(lowered)
+            } else if (/^\d+$/.test(token)) {
+              const index = Number.parseInt(token, 10) - 1
+              const tab = tabs[index]
+              if (tab) {
+                resolvedId = tab.id
+              }
+            }
+            if (!resolvedId) {
+              continue
+            }
+            if (seen.has(resolvedId)) {
+              continue
+            }
+            seen.add(resolvedId)
+            if (terminalTabAliveRef.current.get(resolvedId) ?? false) {
+              resolved.push(resolvedId)
+            }
+          }
+          return resolved
+        }
+
+        const resolveTabsByRoutingMode = (): string[] => {
+          if (routingMode === 'all') {
+            return terminalTabsRef.current
+              .map((tab) => tab.id)
+              .filter((id) => terminalTabAliveRef.current.get(id) ?? false)
+          }
+          if (routingMode === 'tabs') {
+            return resolveTargetTabs(routingSelector)
+          }
+          return [tabId].filter((id) => terminalTabAliveRef.current.get(id) ?? false)
+        }
+
+        const sendCommandToTargets = (targetTabIds: string[], commandText: string): number => {
+          const payload = commandText.endsWith('\n') ? commandText : `${commandText}\n`
+          let sent = 0
+          for (const targetId of targetTabIds) {
+            if (!(terminalTabAliveRef.current.get(targetId) ?? false)) {
+              continue
+            }
+            writeToTabImmediateWithLog(targetId, payload)
+            sent += 1
+          }
+          return sent
+        }
+
+        let routingMode: 'current' | 'all' | 'tabs' = 'current'
+        let routingSelector = ''
+        let autoExportCount = 0
+        let autoExportDir = ''
+
+        for (const step of steps) {
+          if (!(terminalTabAliveRef.current.get(tabId) ?? false)) {
+            setSessionExportStatus('自动化中断：连接已断开')
+            return
+          }
+
+          if (step.kind === 'clearView') {
+            const targetTabs = resolveTabsByRoutingMode()
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：清屏目标终端为空 (${script.name})`)
+              return
+            }
+            for (const targetId of targetTabs) {
+              clearVisibleTerminalForTab(targetId)
+            }
+            setSessionExportStatus(`自动化进行中：已清空 ${targetTabs.length} 个终端视图 (${script.name})`)
+            continue
+          }
+
+          if (step.kind === 'exportVisible') {
+            setSessionExportStatus(`自动化进行中：导出当前显示文本 (${script.name})`)
+            const targetTabs = resolveTabsByRoutingMode()
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：导出目标终端为空 (${script.name})`)
+              return
+            }
+            for (const targetId of targetTabs) {
+              const settled = await waitForOutputSettleBeforeExport(targetId)
+              if (!settled) {
+                const targetTitle = terminalTabsRef.current.find((tab) => tab.id === targetId)?.title ?? targetId
+                setSessionExportStatus(`自动化中断：等待输出完成超时/断开 (${targetTitle})`)
+                return
+              }
+              const exported = await exportVisibleTerminalForTab(targetId)
+              if (!exported) {
+                setSessionExportStatus('自动化中断：导出被取消或失败')
+                return
+              }
+            }
+            continue
+          }
+
+          if (step.kind === 'exportVisibleTo') {
+            setSessionExportStatus(`自动化进行中：自动落盘导出 (${script.name})`)
+            const targetTabs = resolveTabsByRoutingMode()
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：导出目标终端为空 (${script.name})`)
+              return
+            }
+            for (const targetId of targetTabs) {
+              const settled = await waitForOutputSettleBeforeExport(targetId)
+              if (!settled) {
+                const targetTitle = terminalTabsRef.current.find((tab) => tab.id === targetId)?.title ?? targetId
+                setSessionExportStatus(`自动化中断：等待输出完成超时/断开 (${targetTitle})`)
+                return
+              }
+              const exported = await exportVisibleTerminalForTab(targetId, step.pathTemplate)
+              if (!exported) {
+                setSessionExportStatus('自动化中断：自动导出失败')
+                return
+              }
+              autoExportCount += 1
+              if (autoExportDir.length === 0) {
+                autoExportDir = extractDirectoryPath(exported.txtPath)
+              }
+            }
+            continue
+          }
+
+          if (step.kind === 'waitPrompt') {
+            setSessionExportStatus(`自动化进行中：等待提示符 (${script.name})`)
+            const targetTabs = resolveTabsByRoutingMode()
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：等待提示符失败，目标终端为空 (${script.name})`)
+              return
+            }
+            for (const targetId of targetTabs) {
+              const ready = await waitForPromptReady(targetId, step.timeoutMs)
+              if (!ready) {
+                const targetTitle = terminalTabsRef.current.find((tab) => tab.id === targetId)?.title ?? targetId
+                setSessionExportStatus(`自动化中断：等待提示符超时/断开 (${targetTitle})`)
+                return
+              }
+            }
+            continue
+          }
+
+          if (step.kind === 'send') {
+            const nextCommand = step.command.trim().length > 0 ? step.command : ''
+            if (nextCommand.length === 0) {
+              continue
+            }
+            if (routingMode === 'all') {
+              const targetTabs = terminalTabsRef.current
+                .map((tab) => tab.id)
+                .filter((id) => terminalTabAliveRef.current.get(id) ?? false)
+              if (targetTabs.length === 0) {
+                setSessionExportStatus(`自动化中断：没有可用终端可广播 (${script.name})`)
+                return
+              }
+              sendCommandToTargets(targetTabs, nextCommand)
+              continue
+            }
+            if (routingMode === 'tabs') {
+              const targetTabs = resolveTargetTabs(routingSelector)
+              if (targetTabs.length === 0) {
+                setSessionExportStatus(`自动化中断：广播目标为空 (${routingSelector})`)
+                return
+              }
+              sendCommandToTargets(targetTabs, nextCommand)
+              continue
+            }
+            writeToTabImmediateWithLog(tabId, nextCommand.endsWith('\n') ? nextCommand : `${nextCommand}\n`)
+            continue
+          }
+
+          if (step.kind === 'sendAll') {
+            const nextCommand = step.command.trim().length > 0 ? step.command : ''
+            if (nextCommand.length === 0) {
+              continue
+            }
+            const targetTabs = terminalTabsRef.current
+              .map((tab) => tab.id)
+              .filter((id) => terminalTabAliveRef.current.get(id) ?? false)
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：没有可用终端可广播 (${script.name})`)
+              return
+            }
+            const sent = sendCommandToTargets(targetTabs, nextCommand)
+            setSessionExportStatus(`自动化进行中：已广播到 ${sent} 个终端 (${script.name})`)
+            continue
+          }
+
+          if (step.kind === 'sendTabs') {
+            const nextCommand = step.command.trim().length > 0 ? step.command : ''
+            if (nextCommand.length === 0) {
+              continue
+            }
+            const targetTabs = resolveTargetTabs(step.selector)
+            if (targetTabs.length === 0) {
+              setSessionExportStatus(`自动化中断：未匹配到可用终端 (${step.selector})`)
+              return
+            }
+            const sent = sendCommandToTargets(targetTabs, nextCommand)
+            setSessionExportStatus(`自动化进行中：已发送到 ${sent} 个指定终端 (${script.name})`)
+            continue
+          }
+
+          if (step.kind === 'setMode') {
+            routingMode = step.mode
+            routingSelector = step.selector?.trim() ?? ''
+            if (routingMode === 'all') {
+              setSessionExportStatus(`自动化进行中：已切换为广播模式 (${script.name})`)
+            } else if (routingMode === 'tabs') {
+              setSessionExportStatus(`自动化进行中：已切换为指定终端模式 (${routingSelector || '-'})`)
+            } else {
+              setSessionExportStatus(`自动化进行中：已恢复当前终端模式 (${script.name})`)
+            }
+            continue
+          }
+
+          if (step.kind === 'runTagGroup') {
+            const targetTagGroup = sessionCatalogConfig.tagGroups.find((group) => group.label === step.label || group.id === step.label)
+            if (!targetTagGroup) {
+              setSessionExportStatus(`自动化中断：未找到标签分组 (${step.label})`)
+              return
+            }
+            const launched = runSessionTagGroup(targetTagGroup.id, step.target)
+            if (launched <= 0) {
+              setSessionExportStatus(`自动化中断：标签分组无可用设备 (${step.label})`)
+              return
+            }
+            continue
+          }
+
+          if (step.kind === 'sleep') {
+            setSessionExportStatus(`自动化进行中：等待 ${step.timeoutMs}ms (${script.name})`)
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, step.timeoutMs)
+            })
+            continue
+          }
+        }
+
+        routingMode = 'current'
+        routingSelector = ''
+        if (autoExportCount > 0) {
+          const summaryDir = autoExportDir.length > 0 ? autoExportDir : '(目录未知)'
+          window.alert(`自动导出完成\n导出终端数：${autoExportCount}\n目录：${summaryDir}`)
+        }
+        setSessionExportStatus(`自动化已完成：${script.name}（广播模式已自动关闭）`)
+      } finally {
+        automationRunningByTabRef.current.set(tabId, false)
+      }
+    })()
+  }, [clearVisibleTerminalForTab, exportVisibleTerminalForTab, runSessionTagGroup, sessionCatalogConfig.tagGroups, waitForOutputSettleBeforeExport, waitForPromptReady, writeToTabImmediateWithLog])
 
   const updateAppSettings = useCallback((next: AppSettings): void => {
     const normalized = normalizeAppSettings(next)
@@ -2226,12 +4066,86 @@ export const App = () => {
   }, [rightMirrorMode, translatedScreen, baseScreen])
 
   const closeSelectionFloatingUi = useCallback((): void => {
+    selectionTranslateReqSeqRef.current += 1
     setSelectionMenu(null)
+    setLeftContextMenu(null)
     setSelectionPopover(null)
     setSelectionPopoverStatus('')
+    setSelectionOnlinePending(false)
     setCommandExplainPopover(null)
     setCommandExplainDraft(null)
     setCommandExplainStatus('')
+    setParamContextMenu(null)
+    paramContextMenuTargetRef.current = null
+  }, [])
+
+  const handleParamMenuCopy = useCallback((): void => {
+    const target = paramContextMenuTargetRef.current
+    if (!target) {
+      return
+    }
+    const start = typeof target.selectionStart === 'number' ? target.selectionStart : 0
+    const end = typeof target.selectionEnd === 'number' ? target.selectionEnd : 0
+    const copiedText =
+      end > start ? target.value.slice(start, end) : target.value
+    void copyTextToClipboard(copiedText)
+    setParamContextMenu(null)
+    paramContextMenuTargetRef.current = null
+  }, [])
+
+  const handleParamMenuPaste = useCallback((): void => {
+    const target = paramContextMenuTargetRef.current
+    if (!target || target.readOnly || target.disabled) {
+      return
+    }
+    void navigator.clipboard.readText()
+      .then((text) => {
+        if (text.length === 0) {
+          return
+        }
+        const start = typeof target.selectionStart === 'number' ? target.selectionStart : target.value.length
+        const end = typeof target.selectionEnd === 'number' ? target.selectionEnd : target.value.length
+        target.setRangeText(text, start, end, 'end')
+        target.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      .finally(() => {
+        setParamContextMenu(null)
+        paramContextMenuTargetRef.current = null
+      })
+  }, [])
+
+  useEffect(() => {
+    const onContextMenu = (event: MouseEvent): void => {
+      const target = event.target
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+        return
+      }
+      if (!target.closest('.command-search-panel, .session-panel, .automation-panel')) {
+        return
+      }
+
+      event.preventDefault()
+      const menuPosition = clampFloatingPosition(
+        event.clientX,
+        event.clientY,
+        FLOATING_MENU_WIDTH_PX,
+        140,
+      )
+      paramContextMenuTargetRef.current = target
+      setParamContextMenu({
+        x: menuPosition.x,
+        y: menuPosition.y,
+        hasSelection:
+          typeof target.selectionStart === 'number' &&
+          typeof target.selectionEnd === 'number' &&
+          target.selectionEnd > target.selectionStart,
+      })
+    }
+
+    window.addEventListener('contextmenu', onContextMenu, true)
+    return () => {
+      window.removeEventListener('contextmenu', onContextMenu, true)
+    }
   }, [])
 
   const readMirrorSelectionText = useCallback((): string => {
@@ -2245,18 +4159,17 @@ export const App = () => {
       return ''
     }
 
-    const text = selection.toString()
-    const normalizedText = normalizeMirrorSelectionText(text)
-    if (normalizedText.trim().length === 0) {
-      return ''
-    }
-
     const range = selection.getRangeAt(0)
     if (!frame.contains(range.commonAncestorContainer)) {
       return ''
     }
 
-    return normalizedText
+    const fromGrid = normalizeMirrorSelectionText(readMirrorTextFromSelectionRange(range).replace(/\u00a0/g, ' '))
+    if (fromGrid.trim().length > 0) {
+      return fromGrid
+    }
+
+    return normalizeMirrorSelectionText(selection.toString())
   }, [])
 
   const openSelectionPopover = useCallback((state: SelectionPopoverState, status = ''): void => {
@@ -2275,6 +4188,7 @@ export const App = () => {
   const translateSelectionWithOnline = useCallback(
     async (
       selectedText: string,
+      provider: TermbridgeTranslationProvider,
     ): Promise<{
       translatedText: string
       protectedSegments: string[]
@@ -2290,7 +4204,7 @@ export const App = () => {
         ),
       )
 
-      let provider: TermbridgeTranslationProvider = 'google-free'
+      let resolvedProvider: TermbridgeTranslationProvider = provider
       const translatedChunks: string[] = []
 
       for (const chunk of chunks) {
@@ -2303,15 +4217,16 @@ export const App = () => {
           text: chunk.text,
           sourceLang: 'en',
           targetLang: 'zh-CN',
+          provider,
         })
-        provider = result.provider
+        resolvedProvider = result.provider
         translatedChunks.push(result.translatedText.length > 0 ? result.translatedText : chunk.text)
       }
 
       return {
         translatedText: translatedChunks.join(''),
         protectedSegments,
-        provider,
+        provider: resolvedProvider,
       }
     },
     [],
@@ -2390,6 +4305,134 @@ export const App = () => {
     [readMirrorSelectionText],
   )
 
+  const onLeftTerminalContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const term = termRef.current
+    const selectedText = term ? normalizeMirrorSelectionText(term.getSelection()) : ''
+    const position = clampFloatingPosition(event.clientX, event.clientY, FLOATING_MENU_WIDTH_PX, FLOATING_MENU_HEIGHT_PX)
+    setLeftContextMenu({
+      x: position.x,
+      y: position.y,
+      selectedText,
+    })
+    setSelectionMenu(null)
+    setSelectionPopover(null)
+    setCommandExplainPopover(null)
+  }, [])
+
+  const onLeftMenuCopy = useCallback((): void => {
+    if (!leftContextMenu || leftContextMenu.selectedText.length === 0) {
+      return
+    }
+    void copyTextToClipboard(leftContextMenu.selectedText)
+    setLeftContextMenu(null)
+  }, [leftContextMenu])
+
+  const onLeftMenuPaste = useCallback((): void => {
+    const tabId = activeTerminalTabIdRef.current
+    if (!(terminalTabAliveRef.current.get(tabId) ?? false)) {
+      setSessionExportStatus('当前标签会话已断开，请先重连或新建标签')
+      return
+    }
+    void navigator.clipboard.readText()
+      .then((text) => {
+        if (text.length === 0) {
+          return
+        }
+        const normalized = normalizeTerminalInputData(text)
+        appendTerminalTabLog(tabId, 'input', normalized)
+        ptyClient.writePaste(tabId, normalized)
+      })
+      .catch(() => {
+        setSessionExportStatus('读取剪贴板失败')
+      })
+      .finally(() => {
+        setLeftContextMenu(null)
+      })
+  }, [appendTerminalTabLog])
+
+  const onLeftMenuClear = useCallback((): void => {
+    const tabId = activeTerminalTabIdRef.current
+    clearVisibleTerminalForTab(tabId)
+    setLeftContextMenu(null)
+  }, [clearVisibleTerminalForTab])
+
+  const onLeftMenuExport = useCallback((): void => {
+    const tabId = activeTerminalTabIdRef.current
+    void exportVisibleTerminalForTab(tabId)
+    setLeftContextMenu(null)
+  }, [exportVisibleTerminalForTab])
+
+  const onApplySyntaxHighlightFromText = useCallback((rawText: string): void => {
+    const normalized = normalizeMirrorSelectionText(rawText).replace(/\s+/g, ' ').trim()
+    if (normalized.length === 0) {
+      return
+    }
+
+    const activeTabId = activeTerminalTabIdRef.current
+    const hints = networkHintsByTabRef.current.get(activeTabId) ?? defaultNetworkHints
+    const scope = resolveHighlightScope(activeContextIdRef.current, hints)
+
+    setAppSettings((previous) => {
+      const exists = previous.syntaxHighlightRules.some(
+        (rule) => rule.scope === scope && rule.matchType === 'contains' && rule.pattern.toLowerCase() === normalized.toLowerCase(),
+      )
+
+      const nextRules = exists
+        ? previous.syntaxHighlightRules.map((rule) => {
+          if (rule.scope === scope && rule.matchType === 'contains' && rule.pattern.toLowerCase() === normalized.toLowerCase()) {
+            return {
+              ...rule,
+              enabled: true,
+            }
+          }
+          return rule
+        })
+        : [
+          ...previous.syntaxHighlightRules,
+          {
+            id: `hl-quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            label: `高亮 ${normalized.slice(0, 16)}`,
+            scope,
+            matchType: 'contains',
+            styleMode: 'background',
+            pattern: normalized,
+            color: '#22c55e',
+            enabled: true,
+          },
+        ]
+
+      const nextSettings = normalizeAppSettings({
+        ...previous,
+        syntaxHighlightRules: nextRules,
+      })
+
+      try {
+        window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings))
+      } catch {
+        // ignore localStorage write failures
+      }
+      return nextSettings
+    })
+    setSessionExportStatus(`已添加语法高亮：${normalized}`)
+  }, [])
+
+  const onSelectionMenuSyntaxHighlight = useCallback((): void => {
+    if (!selectionMenu) {
+      return
+    }
+    onApplySyntaxHighlightFromText(selectionMenu.text)
+    setSelectionMenu(null)
+  }, [onApplySyntaxHighlightFromText, selectionMenu])
+
+  const onLeftMenuSyntaxHighlight = useCallback((): void => {
+    if (!leftContextMenu || leftContextMenu.selectedText.trim().length === 0) {
+      return
+    }
+    onApplySyntaxHighlightFromText(leftContextMenu.selectedText)
+    setLeftContextMenu(null)
+  }, [leftContextMenu, onApplySyntaxHighlightFromText])
+
   const onSelectionMenuCopy = useCallback((): void => {
     if (!selectionMenu) {
       return
@@ -2399,58 +4442,26 @@ export const App = () => {
     setSelectionMenu(null)
   }, [selectionMenu])
 
-  const onSelectionMenuTranslate = useCallback((): void => {
-    if (!selectionMenu) {
-      return
-    }
+  const runOnlineSelectionTranslate = useCallback((
+    selectedText: string,
+    provider: TermbridgeTranslationProvider,
+  ): void => {
+    const requestSeq = selectionTranslateReqSeqRef.current + 1
+    selectionTranslateReqSeqRef.current = requestSeq
+    setSelectionOnlinePending(true)
+    setSelectionPopoverStatus(`在线翻译中... (${translationProviderLabel(provider)})`)
+    window.setTimeout(() => {
+      if (selectionTranslateReqSeqRef.current !== requestSeq) {
+        return
+      }
+      setSelectionPopoverStatus(`在线翻译较慢，可手动重试或切换翻译来源 (${translationProviderLabel(provider)})`)
+    }, 3500)
 
-    const selectedText = selectionMenu.text
-    const localEntry = selectionMenu.localEntry
-    const position = clampFloatingPosition(
-      selectionMenu.x + 12,
-      selectionMenu.y + 12,
-      FLOATING_POPOVER_WIDTH_PX,
-      FLOATING_POPOVER_HEIGHT_PX,
-    )
-    setSelectionMenu(null)
-
-    if (localEntry) {
-      openSelectionPopover(
-        {
-          x: position.x,
-          y: position.y,
-          originalText: localEntry.source,
-          translatedText: localEntry.target,
-          source: 'local',
-          onlineProvider: undefined,
-          localEntry,
-          protectedSegments: [],
-        },
-        '已命中本地词库，可继续修正后重新保存',
-      )
-      return
-    }
-
-    const localPreview = translateSelectionText(selectedText, glossaryEntriesRef.current)
-    const initialTranslation =
-      localPreview.translated.trim().length > 0 ? localPreview.translated : selectedText
-
-    openSelectionPopover(
-      {
-        x: position.x,
-        y: position.y,
-        originalText: selectedText,
-        translatedText: initialTranslation,
-        source: 'online',
-        onlineProvider: undefined,
-        localEntry: null,
-        protectedSegments: localPreview.protectedSegments,
-      },
-      '在线翻译中...',
-    )
-
-    void translateSelectionWithOnline(selectedText)
+    void translateSelectionWithOnline(selectedText, provider)
       .then((onlineResult) => {
+        if (selectionTranslateReqSeqRef.current !== requestSeq) {
+          return
+        }
         const normalizedOnlineText = normalizeMirrorSelectionText(onlineResult.translatedText)
         setSelectionPopover((previous) => {
           if (!previous || previous.originalText !== selectedText) {
@@ -2467,9 +4478,13 @@ export const App = () => {
           }
         })
         setSelectionDraftTranslation(normalizedOnlineText)
-        setSelectionPopoverStatus('在线翻译完成，可按需修正后添加到本地词库')
+        setSelectionOnlinePending(false)
+        setSelectionPopoverStatus(`在线翻译完成 (${translationProviderLabel(onlineResult.provider)})，可按需修正后添加到本地词库`)
       })
       .catch((error: unknown) => {
+        if (selectionTranslateReqSeqRef.current !== requestSeq) {
+          return
+        }
         const fallback = translateSelectionText(selectedText, glossaryEntriesRef.current)
         const fallbackText = normalizeMirrorSelectionText(
           fallback.translated.trim().length > 0 ? fallback.translated : selectedText,
@@ -2491,9 +4506,67 @@ export const App = () => {
           }
         })
         setSelectionDraftTranslation(fallbackText)
-        setSelectionPopoverStatus(`在线翻译失败：${errorMessage}。已回退到本地规则翻译`)
+        setSelectionOnlinePending(false)
+        setSelectionPopoverStatus(`在线翻译失败：${errorMessage}。可手动重试或切换翻译来源`)
       })
-  }, [selectionMenu, openSelectionPopover, translateSelectionWithOnline])
+  }, [translateSelectionWithOnline])
+
+  const onSelectionMenuTranslate = useCallback((): void => {
+    if (!selectionMenu) {
+      return
+    }
+
+    const selectedText = selectionMenu.text
+    const localEntry = selectionMenu.localEntry
+    const position = clampFloatingPosition(
+      selectionMenu.x + 12,
+      selectionMenu.y + 12,
+      FLOATING_POPOVER_WIDTH_PX,
+      FLOATING_POPOVER_HEIGHT_PX,
+    )
+    setSelectionMenu(null)
+
+    if (localEntry) {
+      selectionTranslateReqSeqRef.current += 1
+      setSelectionOnlinePending(false)
+      openSelectionPopover(
+        {
+          x: position.x,
+          y: position.y,
+          originalText: localEntry.source,
+          translatedText: localEntry.target,
+          source: 'local',
+          onlineProvider: undefined,
+          localEntry,
+          protectedSegments: [],
+        },
+        '已命中本地词库，可继续修正后重新保存',
+      )
+      return
+    }
+
+    const localPreview = translateSelectionText(selectedText, glossaryEntriesRef.current)
+    const initialTranslation =
+      localPreview.translated.trim().length > 0 ? localPreview.translated : selectedText
+    const provider = translationConfigRef.current?.defaultProvider ?? 'google-free'
+    setSelectionOnlineProvider(provider)
+
+    openSelectionPopover(
+      {
+        x: position.x,
+        y: position.y,
+        originalText: selectedText,
+        translatedText: initialTranslation,
+        source: 'online',
+        onlineProvider: undefined,
+        localEntry: null,
+        protectedSegments: localPreview.protectedSegments,
+      },
+      `在线翻译中... (${translationProviderLabel(provider)})`,
+    )
+
+    runOnlineSelectionTranslate(selectedText, provider)
+  }, [selectionMenu, openSelectionPopover, runOnlineSelectionTranslate])
 
   const onSelectionMenuSave = useCallback((): void => {
     if (!selectionMenu) {
@@ -2522,7 +4595,9 @@ export const App = () => {
       protectedSegments: translation.protectedSegments,
     })
     setSelectionDraftTranslation(targetText)
+    selectionTranslateReqSeqRef.current += 1
     setSelectionPopoverStatus('请确认译文后点击“添加到本地词库”')
+    setSelectionOnlinePending(false)
     setSelectionMenu(null)
   }, [selectionMenu])
 
@@ -2549,57 +4624,111 @@ export const App = () => {
       protectedSegments: [],
     })
     setSelectionDraftTranslation(selectionMenu.localEntry.target)
+    selectionTranslateReqSeqRef.current += 1
     setSelectionPopoverStatus('')
+    setSelectionOnlinePending(false)
     setSelectionMenu(null)
   }, [selectionMenu])
+
+  const onSelectionPopoverRetry = useCallback((): void => {
+    if (!selectionPopover) {
+      return
+    }
+    runOnlineSelectionTranslate(selectionPopover.originalText, selectionOnlineProvider)
+  }, [runOnlineSelectionTranslate, selectionOnlineProvider, selectionPopover])
+
+  const onSelectionPopoverUseLocal = useCallback((): void => {
+    if (!selectionPopover) {
+      return
+    }
+    const local = translateSelectionText(selectionPopover.originalText, glossaryEntriesRef.current)
+    const translated = normalizeMirrorSelectionText(
+      local.translated.trim().length > 0 ? local.translated : selectionPopover.originalText,
+    )
+    setSelectionPopover((previous) => {
+      if (!previous) {
+        return previous
+      }
+      return {
+        ...previous,
+        translatedText: translated,
+        source: local.source,
+        onlineProvider: undefined,
+        localEntry: local.localEntry,
+        protectedSegments: local.protectedSegments,
+      }
+    })
+    setSelectionDraftTranslation(translated)
+    setSelectionOnlinePending(false)
+    setSelectionPopoverStatus('已切换到本地翻译来源')
+  }, [selectionPopover])
+
+  const openCommandExplainFromText = useCallback(
+    (selectedText: string, x: number, y: number): void => {
+      const normalized = normalizeMirrorSelectionText(selectedText)
+      if (normalized.trim().length === 0) {
+        return
+      }
+
+      const context = resolveExplainContext(activeContextIdRef.current, activeNetworkHints)
+      const matched = explainCommandByRules(normalized, context, builtinExplainRules, userExplainRules)
+      const position = clampFloatingPosition(
+        x + 12,
+        y + 12,
+        FLOATING_POPOVER_WIDTH_PX,
+        FLOATING_POPOVER_HEIGHT_PX,
+      )
+
+      const localRule = matched.matchedRuleId
+        ? userExplainRules.find((rule) => rule.id === matched.matchedRuleId) ?? null
+        : null
+
+      setCommandExplainPopover({
+        x: position.x,
+        y: position.y,
+        selectedText: normalized,
+        normalizedCommand: matched.normalized,
+        context,
+        source: matched.source,
+        title: matched.title,
+        explanation: matched.explanation,
+        risk: matched.risk,
+        args: matched.args,
+        examples: matched.examples,
+        matchedRuleId: localRule?.id ?? null,
+      })
+      setCommandExplainDraft({
+        id: localRule?.id,
+        title: matched.title,
+        explanation: matched.explanation,
+        risk: matched.risk,
+        matcherType: localRule?.matcherType ?? 'prefix',
+        pattern: localRule?.pattern ?? matched.normalized,
+        argsText: (matched.args ?? []).join('\n'),
+        examplesText: (matched.examples ?? []).join('\n'),
+      })
+      setCommandExplainStatus(matched.source === 'none' ? '未命中本地规则，可保存为自定义解释' : '')
+      setSelectionMenu(null)
+      setSelectionPopover(null)
+      setSelectionPopoverStatus('')
+    },
+    [activeNetworkHints, builtinExplainRules, userExplainRules],
+  )
 
   const onSelectionMenuExplainCommand = useCallback((): void => {
     if (!selectionMenu) {
       return
     }
+    openCommandExplainFromText(selectionMenu.text, selectionMenu.x, selectionMenu.y)
+  }, [openCommandExplainFromText, selectionMenu])
 
-    const context = resolveExplainContext(activeContextIdRef.current, activeNetworkHints)
-    const matched = explainCommandByRules(selectionMenu.text, context, builtinExplainRules, userExplainRules)
-    const position = clampFloatingPosition(
-      selectionMenu.x + 12,
-      selectionMenu.y + 12,
-      FLOATING_POPOVER_WIDTH_PX,
-      FLOATING_POPOVER_HEIGHT_PX,
-    )
-
-    const localRule = matched.matchedRuleId
-      ? userExplainRules.find((rule) => rule.id === matched.matchedRuleId) ?? null
-      : null
-
-    setCommandExplainPopover({
-      x: position.x,
-      y: position.y,
-      selectedText: selectionMenu.text,
-      normalizedCommand: matched.normalized,
-      context,
-      source: matched.source,
-      title: matched.title,
-      explanation: matched.explanation,
-      risk: matched.risk,
-      args: matched.args,
-      examples: matched.examples,
-      matchedRuleId: localRule?.id ?? null,
-    })
-    setCommandExplainDraft({
-      id: localRule?.id,
-      title: matched.title,
-      explanation: matched.explanation,
-      risk: matched.risk,
-      matcherType: localRule?.matcherType ?? 'prefix',
-      pattern: localRule?.pattern ?? matched.normalized,
-      argsText: (matched.args ?? []).join('\n'),
-      examplesText: (matched.examples ?? []).join('\n'),
-    })
-    setCommandExplainStatus(matched.source === 'none' ? '未命中本地规则，可保存为自定义解释' : '')
-    setSelectionMenu(null)
-    setSelectionPopover(null)
-    setSelectionPopoverStatus('')
-  }, [activeNetworkHints, builtinExplainRules, selectionMenu, userExplainRules])
+  const onLeftMenuExplainCommand = useCallback((): void => {
+    if (!leftContextMenu || leftContextMenu.selectedText.trim().length === 0) {
+      return
+    }
+    openCommandExplainFromText(leftContextMenu.selectedText, leftContextMenu.x, leftContextMenu.y)
+    setLeftContextMenu(null)
+  }, [leftContextMenu, openCommandExplainFromText])
 
   const onCommandExplainCopy = useCallback((): void => {
     if (!commandExplainPopover) {
@@ -2742,7 +4871,7 @@ export const App = () => {
   }, [selectionPopover, selectionDraftTranslation, saveSelectionToGlossary])
 
   useEffect(() => {
-    if (!selectionMenu && !selectionPopover && !commandExplainPopover) {
+    if (!selectionMenu && !leftContextMenu && !selectionPopover && !commandExplainPopover && !paramContextMenu) {
       return
     }
 
@@ -2752,11 +4881,19 @@ export const App = () => {
         return
       }
 
+      if (leftContextMenuRef.current?.contains(target)) {
+        return
+      }
+
       if (selectionPopoverRef.current?.contains(target)) {
         return
       }
 
       if (commandExplainPopoverRef.current?.contains(target)) {
+        return
+      }
+
+      if (paramContextMenuRef.current?.contains(target)) {
         return
       }
 
@@ -2776,7 +4913,7 @@ export const App = () => {
       window.removeEventListener('mousedown', onPointerDown)
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [commandExplainPopover, selectionMenu, selectionPopover, closeSelectionFloatingUi])
+  }, [commandExplainPopover, leftContextMenu, paramContextMenu, selectionMenu, selectionPopover, closeSelectionFloatingUi])
 
   const updateRightViewport = (nextViewportY: number): void => {
     const term = termRef.current
@@ -3064,13 +5201,23 @@ export const App = () => {
       scheduleSnapshot()
     })
 
-    const offPtyExit = ptyClient.onExit(({ tabId, exitCode }) => {
+    const offPtyExit = ptyClient.onExit(({ tabId, exitCode, source }) => {
+      const currentTransport = terminalTabTransportRef.current.get(tabId) ?? 'pty'
+      const exitSource: TerminalTransport = source === 'local' ? 'local' : 'pty'
+      if (currentTransport !== exitSource) {
+        return
+      }
       updateTabAliveState(tabId, false)
-      const exitMessage = `\r\n[pty exited: ${exitCode}]\r\n`
+      const exitMessage = exitSource === 'local'
+        ? '\r\n[local disconnected]\r\n'
+        : `\r\n[pty exited: ${exitCode}]\r\n`
       appendTerminalTabBuffer(tabId, exitMessage)
       appendTerminalTabLog(tabId, 'output', exitMessage)
       if (tabId === activeTerminalTabIdRef.current) {
         term.write(exitMessage)
+      }
+      if (exitSource === 'local') {
+        restoreTabToShell(tabId, '\r\n[returned to local shell]\r\n')
       }
       scheduleSnapshot()
     })
@@ -3080,13 +5227,14 @@ export const App = () => {
       if (!(terminalTabAliveRef.current.get(activeTabId) ?? false)) {
         return
       }
-      appendTerminalTabLog(activeTabId, 'input', data)
-      if (isLikelyPasteInput(data)) {
-        ptyClient.writePaste(activeTabId, data)
+      const normalizedInput = normalizeTerminalInputData(data)
+      appendTerminalTabLog(activeTabId, 'input', normalizedInput)
+      if (isLikelyPasteInput(normalizedInput)) {
+        ptyClient.writePaste(activeTabId, normalizedInput)
         return
       }
 
-      ptyClient.write(activeTabId, data)
+      ptyClient.write(activeTabId, normalizedInput)
     })
 
     term.onResize(({ cols, rows }) => {
@@ -3107,6 +5255,9 @@ export const App = () => {
     const initialTabId = activeTerminalTabIdRef.current
     void ptyClient.spawn(initialTabId, term.cols, term.rows).then((spawned) => {
       updateTabAliveState(initialTabId, spawned)
+      if (spawned) {
+        updateTabTransport(initialTabId, 'pty')
+      }
       if (spawned) {
         const maxViewportY = term.buffer.active.baseY
         rightViewportYRef.current = maxViewportY
@@ -3131,7 +5282,7 @@ export const App = () => {
       fitAndResizeRef.current = null
       termRef.current = null
     }
-  }, [appendTerminalTabBuffer, appendTerminalTabLog, updateNetworkHintsForTab, updateTabAliveState, writeToTabImmediateWithLog])
+  }, [appendTerminalTabBuffer, appendTerminalTabLog, restoreTabToShell, updateNetworkHintsForTab, updateTabAliveState, updateTabTransport, writeToTabImmediateWithLog])
 
   useEffect(() => {
     const term = termRef.current
@@ -3139,10 +5290,24 @@ export const App = () => {
       return
     }
 
-    term.options.theme = resolveXtermTheme(appSettings.theme)
-  }, [appSettings.theme])
+    term.options.theme = resolveXtermTheme(appSettings.theme, {
+      background: appSettings.terminalBackground,
+      foreground: appSettings.terminalForeground,
+    })
+  }, [appSettings.terminalBackground, appSettings.terminalForeground, appSettings.theme])
 
-  const headerTitle = useMemo(() => (isDev ? 'termbridge-v2 (dev)' : 'termbridge-v2'), [])
+  const headerTitle = useMemo(
+    () => (isDev ? 'TMT-Terminal-mirror-translation (dev)' : 'TMT-Terminal-mirror-translation'),
+    [],
+  )
+  const activeHighlightScope = useMemo<SyntaxHighlightRule['scope']>(
+    () => resolveHighlightScope(activeContextId, activeNetworkHints),
+    [activeContextId, activeNetworkHints],
+  )
+  const selectionProviderOptions = useMemo(
+    () => resolveSelectionProviderOptions(translationConfig),
+    [translationConfig],
+  )
   const shellStyle = useMemo(
     () =>
       ({
@@ -3151,8 +5316,10 @@ export const App = () => {
         '--term-line-height': `${TERMINAL_DISPLAY.lineHeight}`,
         '--term-letter-spacing': `${TERMINAL_DISPLAY.letterSpacing}px`,
         '--row-height': `${cellMetrics.height}px`,
+        '--terminal-bg': appSettings.terminalBackground,
+        '--terminal-fg': appSettings.terminalForeground,
       }) as CSSProperties,
-    [appSettings.fontScale, cellMetrics.height],
+    [appSettings.fontScale, appSettings.terminalBackground, appSettings.terminalForeground, cellMetrics.height],
   )
 
   useEffect(() => {
@@ -3237,7 +5404,17 @@ export const App = () => {
               </button>
             </div>
           </div>
-          <div ref={leftHostRef} className="terminal-host" />
+          <div className="terminal-host-wrap" onContextMenu={onLeftTerminalContextMenu}>
+            <div ref={leftHostRef} className="terminal-host" />
+            <LeftHighlightOverlay
+              screen={baseScreen}
+              cellWidth={cellMetrics.width}
+              cellHeight={cellMetrics.height}
+              rules={appSettings.syntaxHighlightRules}
+              activeScope={activeHighlightScope}
+              opacity={appSettings.leftHighlightOpacity}
+            />
+          </div>
         </section>
 
         <div
@@ -3281,9 +5458,9 @@ export const App = () => {
               <button
                 className={`debug-button${sidePanelMode === 'commandExplain' ? ' toolbar-button-active' : ''}`}
                 onClick={() => toggleSidePanel('commandExplain')}
-                title="命令解释规则库"
+                title="配置解读规则库"
               >
-                命令解释
+                配置解读
               </button>
               <button
                 className={`debug-button${sidePanelMode === 'settings' ? ' toolbar-button-active' : ''}`}
@@ -3326,6 +5503,8 @@ export const App = () => {
               screen={mirrorScreenToRender}
               cellWidth={cellMetrics.width}
               cellHeight={cellMetrics.height}
+              highlightRules={appSettings.syntaxHighlightRules}
+              activeScope={activeHighlightScope}
             />
             {rightMirrorMode === 'translated' && <MarkerLayer markers={markers} />}
           </div>
@@ -3334,6 +5513,8 @@ export const App = () => {
             entries={glossaryEntries}
             onDeleteEntry={deleteGlossaryEntry}
             onClose={closeSidePanel}
+            onImportGlossary={importGlossary}
+            onExportGlossary={exportGlossary}
             onOpenTranslationStrategy={openTranslationStrategy}
           />
           <TranslationStrategyPanel
@@ -3358,6 +5539,10 @@ export const App = () => {
             onDeleteEntry={handleDeleteCatalogEntry}
             onReorderEntries={handleReorderCatalogEntries}
             onResetSystemEntries={handleResetCatalogSystemEntries}
+            onBulkDeleteGroups={handleBulkDeleteCatalogGroups}
+            onBulkDeleteEntries={handleBulkDeleteCatalogEntries}
+            onExportData={exportCommandCatalogExchange}
+            onImportData={importCommandCatalogExchange}
           />
           <CommandExplainPanel
             isOpen={sidePanelMode === 'commandExplain'}
@@ -3366,6 +5551,10 @@ export const App = () => {
             userRules={userExplainRules}
             onUpsertUserRule={handleUpsertUserExplainRule}
             onDeleteUserRule={handleDeleteUserExplainRule}
+            onBulkDeleteUserRules={handleBulkDeleteUserExplainRules}
+            onBulkDeleteContexts={handleBulkDeleteExplainContexts}
+            onExportData={exportCommandExplainExchange}
+            onImportData={importCommandExplainExchange}
           />
           <AutomationPanel
             isOpen={sidePanelMode === 'automation'}
@@ -3378,6 +5567,10 @@ export const App = () => {
             onDeleteGroup={handleDeleteAutomationGroup}
             onReorderGroups={handleReorderAutomationGroups}
             onReorderScripts={handleReorderAutomationScripts}
+            onBulkDeleteGroups={handleBulkDeleteAutomationGroups}
+            onBulkDeleteScripts={handleBulkDeleteAutomationScripts}
+            onExportData={exportAutomationExchange}
+            onImportData={importAutomationExchange}
           />
           <SessionManagerPanel
             isOpen={sidePanelMode === 'sessions'}
@@ -3387,25 +5580,47 @@ export const App = () => {
             onDeleteGroup={handleDeleteSessionGroup}
             onReorderGroups={handleReorderSessionGroups}
             onUpsertSession={handleUpsertSession}
+            onBulkCreateSessions={handleBulkCreateSessions}
+            onBulkDeleteGroups={handleBulkDeleteSessionGroups}
+            onBulkDeleteSessions={handleBulkDeleteSessions}
             onDeleteSession={handleDeleteSession}
             onReorderSessions={handleReorderSessions}
             onConnectCurrentTab={handleConnectSessionCurrentTab}
             onConnectNewTab={handleConnectSessionNewTab}
+            onUpsertTagGroup={handleUpsertSessionTagGroup}
+            onDeleteTagGroup={handleDeleteSessionTagGroup}
+            onConnectTagGroupCurrent={handleConnectSessionTagGroupCurrent}
+            onConnectTagGroupNew={handleConnectSessionTagGroupNew}
             onUpsertLocalPortPack={handleUpsertLocalPortPack}
             onDeleteLocalPortPack={handleDeleteLocalPortPack}
             onExportCurrentTabLog={() => {
               void handleExportCurrentTabLog()
             }}
+            onExportData={exportSessionExchange}
+            onImportData={importSessionExchange}
             exportStatus={sessionExportStatus}
           />
           <SettingsPanel
             isOpen={sidePanelMode === 'settings'}
             settings={appSettings}
+            activeHighlightScope={activeHighlightScope}
             translationConfig={translationConfig}
             translationStatus={translationConfigStatus}
             onClose={closeSidePanel}
             onChange={updateAppSettings}
             onSaveTranslationConfig={saveTranslationConfigFromSettings}
+            onImportGlossary={importGlossary}
+            onExportGlossary={exportGlossary}
+            onImportSessions={importSessionExchange}
+            onExportSessions={exportSessionExchange}
+            onImportAutomation={importAutomationExchange}
+            onExportAutomation={exportAutomationExchange}
+            onImportCommandCatalog={importCommandCatalogExchange}
+            onExportCommandCatalog={exportCommandCatalogExchange}
+            onImportCommandExplain={importCommandExplainExchange}
+            onExportCommandExplain={exportCommandExplainExchange}
+            onExportAllData={exportAllDataExchange}
+            onImportAllData={importAllDataExchange}
           />
         </section>
       </main>
@@ -3424,7 +5639,10 @@ export const App = () => {
             翻译
           </button>
           <button className="selection-context-item" role="menuitem" onClick={onSelectionMenuExplainCommand}>
-            解释命令
+            配置解读
+          </button>
+          <button className="selection-context-item" role="menuitem" onClick={onSelectionMenuSyntaxHighlight}>
+            语法高亮
           </button>
           <button className="selection-context-item" role="menuitem" onClick={onSelectionMenuSave}>
             添加到本地词库
@@ -3439,6 +5657,65 @@ export const App = () => {
           </button>
         </div>
       )}
+      {leftContextMenu && (
+        <div
+          className="selection-context-menu"
+          style={{ left: `${leftContextMenu.x}px`, top: `${leftContextMenu.y}px` }}
+          role="menu"
+          aria-label="Terminal context menu"
+          ref={leftContextMenuRef}
+        >
+          <button
+            className="selection-context-item"
+            role="menuitem"
+            onClick={onLeftMenuCopy}
+            disabled={leftContextMenu.selectedText.length === 0}
+          >
+            复制
+          </button>
+          <button className="selection-context-item" role="menuitem" onClick={onLeftMenuPaste}>
+            粘贴
+          </button>
+          <button className="selection-context-item" role="menuitem" onClick={onLeftMenuClear}>
+            清空
+          </button>
+          <button className="selection-context-item" role="menuitem" onClick={onLeftMenuExport}>
+            导出文本
+          </button>
+          <button
+            className="selection-context-item"
+            role="menuitem"
+            onClick={onLeftMenuExplainCommand}
+            disabled={leftContextMenu.selectedText.trim().length === 0}
+          >
+            配置解读
+          </button>
+          <button
+            className="selection-context-item"
+            role="menuitem"
+            onClick={onLeftMenuSyntaxHighlight}
+            disabled={leftContextMenu.selectedText.trim().length === 0}
+          >
+            语法高亮
+          </button>
+        </div>
+      )}
+      {paramContextMenu && (
+        <div
+          className="selection-context-menu"
+          style={{ left: `${paramContextMenu.x}px`, top: `${paramContextMenu.y}px` }}
+          role="menu"
+          aria-label="Param input context menu"
+          ref={paramContextMenuRef}
+        >
+          <button className="selection-context-item" role="menuitem" onClick={handleParamMenuCopy}>
+            {paramContextMenu.hasSelection ? '复制选中' : '复制全部'}
+          </button>
+          <button className="selection-context-item" role="menuitem" onClick={handleParamMenuPaste}>
+            粘贴
+          </button>
+        </div>
+      )}
       {selectionPopover && (
         <div
           className="selection-translate-popover"
@@ -3450,6 +5727,32 @@ export const App = () => {
           <div className="selection-popover-title">选中文本翻译</div>
           <div className="selection-popover-source">
             来源：{translationSourceLabel(selectionPopover.source, selectionPopover.onlineProvider)}
+          </div>
+          <div className="selection-popover-controls">
+            <label className="selection-popover-label">
+              翻译来源
+              <select
+                className="selection-popover-select"
+                value={selectionOnlineProvider}
+                onChange={(event) => setSelectionOnlineProvider(event.target.value as TermbridgeTranslationProvider)}
+              >
+                {selectionProviderOptions.map((provider) => (
+                  <option key={provider} value={provider}>
+                    {translationProviderLabel(provider)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="selection-popover-action" onClick={onSelectionPopoverUseLocal}>
+              使用本地翻译
+            </button>
+            <button
+              className="selection-popover-action"
+              onClick={onSelectionPopoverRetry}
+              disabled={selectionOnlinePending}
+            >
+              {selectionOnlinePending ? '在线请求中...' : '重新请求在线翻译'}
+            </button>
           </div>
           <div className="selection-popover-grid">
             <div className="selection-popover-panel">
@@ -3495,7 +5798,7 @@ export const App = () => {
           aria-label="Command explanation"
           ref={commandExplainPopoverRef}
         >
-          <div className="selection-popover-title">命令解释</div>
+          <div className="selection-popover-title">配置解读</div>
           <div className="selection-popover-source">
             上下文：{commandExplainPopover.context} · 来源：{explainSourceLabel(commandExplainPopover.source)}
           </div>
@@ -3599,7 +5902,7 @@ export const App = () => {
           {commandExplainStatus.length > 0 && <div className="selection-popover-status">{commandExplainStatus}</div>}
           <div className="selection-popover-actions">
             <button className="selection-popover-action" onClick={onCommandExplainCopy}>
-              复制解释
+              复制解读
             </button>
             <button className="selection-popover-action selection-popover-action-primary" onClick={onCommandExplainSaveLocalRule}>
               保存为本地规则

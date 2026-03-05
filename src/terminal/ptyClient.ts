@@ -100,6 +100,6 @@ export const ptyClient = {
   resize: (tabId: string, cols: number, rows: number): Promise<boolean> => window.termbridge.resize(tabId, cols, rows),
   kill: (tabId: string): Promise<boolean> => window.termbridge.kill(tabId),
   onData: (listener: (payload: { tabId: string; data: string }) => void): (() => void) => window.termbridge.onPtyData(listener),
-  onExit: (listener: (payload: { tabId: string; exitCode: number }) => void): (() => void) =>
+  onExit: (listener: (payload: { tabId: string; exitCode: number; source?: 'pty' | 'local' }) => void): (() => void) =>
     window.termbridge.onPtyExit(listener),
 }

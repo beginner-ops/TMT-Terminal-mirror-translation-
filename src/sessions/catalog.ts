@@ -8,6 +8,13 @@ export type SessionGroup = {
   label: string
 }
 
+export type SessionTagGroup = {
+  id: string
+  label: string
+  sessionIds: string[]
+  updatedAt: string
+}
+
 export type LocalPortVendorPlan = Record<LocalPackVendor, number>
 
 export type LocalPortPackConfig = {
@@ -42,6 +49,7 @@ export type SessionCatalogConfig = {
   groups: SessionGroup[]
   sessions: SessionEntry[]
   localPortPacks: LocalPortPackConfig[]
+  tagGroups: SessionTagGroup[]
 }
 
 const defaultGroups: SessionGroup[] = [
@@ -64,10 +72,11 @@ export const DEFAULT_LOCAL_VENDOR_PLAN: LocalPortVendorPlan = {
 }
 
 export const DEFAULT_SESSION_CATALOG_CONFIG: SessionCatalogConfig = {
-  version: 2,
+  version: 3,
   groups: defaultGroups,
   sessions: [],
   localPortPacks: [],
+  tagGroups: [],
 }
 
 export const createSessionEntryId = (): string => {
@@ -76,6 +85,10 @@ export const createSessionEntryId = (): string => {
 
 export const createLocalPackId = (): string => {
   return `local-pack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+export const createSessionTagGroupId = (): string => {
+  return `tag-group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 const normalizeGroupId = (input: string): string => {
@@ -236,6 +249,39 @@ const normalizeLocalPack = (input: unknown, index: number): LocalPortPackConfig 
   }
 }
 
+const normalizeTagGroup = (input: unknown, index: number, sessionIdSet: Set<string>): SessionTagGroup | null => {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+  const candidate = input as Partial<SessionTagGroup>
+  const label = typeof candidate.label === 'string' ? candidate.label.trim() : ''
+  if (label.length === 0) {
+    return null
+  }
+  const id =
+    typeof candidate.id === 'string' && candidate.id.trim().length > 0
+      ? candidate.id.trim()
+      : `tag-group-${index}`
+  const updatedAt =
+    typeof candidate.updatedAt === 'string' && candidate.updatedAt.trim().length > 0
+      ? candidate.updatedAt
+      : new Date().toISOString()
+  const sessionIdsRaw = Array.isArray(candidate.sessionIds) ? candidate.sessionIds : []
+  const sessionIds = Array.from(
+    new Set(
+      sessionIdsRaw
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item) => item.length > 0 && sessionIdSet.has(item)),
+    ),
+  )
+  return {
+    id,
+    label,
+    sessionIds,
+    updatedAt,
+  }
+}
+
 export const normalizeSessionCatalogConfig = (input: unknown): SessionCatalogConfig => {
   if (!input || typeof input !== 'object') {
     return DEFAULT_SESSION_CATALOG_CONFIG
@@ -260,11 +306,19 @@ export const normalizeSessionCatalogConfig = (input: unknown): SessionCatalogCon
     .filter((pack): pack is LocalPortPackConfig => Boolean(pack))
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 
+  const sessionIdSet = new Set(sessions.map((session) => session.id))
+  const parsedTagGroups = Array.isArray(candidate.tagGroups) ? candidate.tagGroups : []
+  const tagGroups = parsedTagGroups
+    .map((group, index) => normalizeTagGroup(group, index, sessionIdSet))
+    .filter((group): group is SessionTagGroup => Boolean(group))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+
   return {
-    version: 2,
+    version: 3,
     groups: ensuredGroups,
     sessions,
     localPortPacks,
+    tagGroups,
   }
 }
 
@@ -344,4 +398,3 @@ export const generateLocalPortPackSessions = (
     sessions,
   }
 }
-
